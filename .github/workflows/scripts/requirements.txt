@@ -1,5 +1,0 @@
-requests
-beautifulsoup4
-lxml
-pdfminer.six
-python-dateutil
