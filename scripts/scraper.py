@@ -1,33 +1,116 @@
-import os, json, time
+"""
+Delran BOE Preschool Monitor – Scraper
+
+What it does
+------------
+1) Crawls the Delran BOE meeting minutes page (and subpages) for PDF/DOCX links.
+2) Extracts text and finds preschool-related mentions (via parser_utils.py).
+3) Builds an HTML report and emails it (via email_utils.py).
+4) Persists 'seen' URLs in state.json so future runs only process new docs.
+
+Configuration
+-------------
+SMTP and reporting are provided via environment variables (with fallbacks):
+- REPORT_TO                -> recipient (default: robwaz@delrankids.net)
+- REPORT_FROM or MAIL_FROM -> sender
+- SMTP_HOST
+- SMTP_PORT                -> 587 (STARTTLS) or 465 (implicit SSL)
+- SMTP_USER or SMTP_USERNAME
+- SMTP_PASS or SMTP_PASSWORD
+
+Usage
+-----
+Run directly (e.g., GitHub Actions step):
+    python scripts/scraper.py
+"""
+
+import os
+import json
+import time
+import logging
+from typing import List, Dict
 from urllib.parse import urljoin
+
 import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from datetime import datetime
 
-from parser_utils import extract_text_from_pdf, extract_text_from_docx, find_preschool_mentions
+from parser_utils import (
+    extract_text_from_pdf,
+    extract_text_from_docx,
+    find_preschool_mentions,
+)
 from email_utils import send_email, render_html_report
 
-BASE_URL = "https://www.delranschools.org/b_o_e/meeting_minutes"
-STATE_FILE = "state.json"
-HEADERS = {"User-Agent": "Delran-Preschool-Agent/1.0 (+mailto:alerts@example.com)"}
+# ---- Settings ---------------------------------------------------------------
 
-def load_state():
+BASE_URL = os.environ.get(
+    "DELRAN_MINUTES_URL",
+    "https://www.delranschools.org/b_o_e/meeting_minutes"
+)
+
+STATE_FILE = os.environ.get("STATE_FILE", "state.json")
+
+# Identify ourselves politely to the district site
+HEADERS = {
+    "User-Agent": "Delran-Preschool-Agent/1.0 (+mailto:alerts@example.com)"
+}
+
+# How long to pause between document downloads (be polite)
+DOC_DELAY_SECONDS = float(os.environ.get("DOC_DELAY_SECONDS", "2.0"))
+
+# Requests timeouts
+REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT", "60"))
+
+# ----------------------------------------------------------------------------
+
+
+def load_state() -> Dict:
+    """Load crawler state."""
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            # Corrupt or unreadable state; start fresh
+            return {"seen_urls": []}
     return {"seen_urls": []}
 
-def save_state(state):
-    with open(STATE_FILE, "w") as f:
+
+def save_state(state: Dict) -> None:
+    """Persist crawler state."""
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
 
-def get_minutes_links():
-    resp = requests.get(BASE_URL, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "lxml")
 
-    links = []
+def fetch_url(url: str, *, binary: bool = False) -> bytes | str:
+    """
+    Fetch a URL with a simple retry (3 attempts).
+    Returns bytes if binary=True, else text.
+    """
+    attempts = 3
+    for i in range(1, attempts + 1):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            return resp.content if binary else resp.text
+        except Exception as e:
+            if i == attempts:
+                raise
+            time.sleep(1.5 * i)  # basic backoff
+
+
+def get_minutes_links() -> List[Dict[str, str]]:
+    """
+    Crawl the main minutes page, and expand subpages to collect PDF/DOCX links.
+    Returns: list of dicts {title, url}
+    """
+    html = fetch_url(BASE_URL, binary=False)
+    soup = BeautifulSoup(html, "lxml")
+
+    links: List[Dict[str, str]] = []
+
     for a in soup.select("a[href]"):
         href = a.get("href")
         if not href:
@@ -35,111 +118,4 @@ def get_minutes_links():
         url = urljoin(BASE_URL, href)
         title = a.get_text(strip=True) or url
 
-        if any(url.lower().endswith(ext) for ext in [".pdf", ".docx", ".doc"]):
-            links.append({"title": title, "url": url})
-        elif "meeting" in url.lower() or "minute" in url.lower() or "board" in url.lower():
-            # Explore subpages for documents
-            try:
-                links.extend(expand_subpage(url))
-            except Exception:
-                pass
 
-    # Deduplicate while preserving order
-    seen = set()
-    uniq = []
-    for it in links:
-        if it["url"] not in seen:
-            uniq.append(it)
-            seen.add(it["url"])
-    return uniq
-
-def expand_subpage(url: str):
-    resp = requests.get(url, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "lxml")
-    out = []
-    for a in soup.select("a[href]"):
-        href = a.get("href")
-        if not href:
-            continue
-        u = urljoin(url, href)
-        title = a.get_text(strip=True) or u
-        if any(u.lower().endswith(ext) for ext in [".pdf", ".docx", ".doc"]):
-            out.append({"title": title, "url": u})
-    return out
-
-def download(url: str) -> bytes:
-    r = requests.get(url, headers=HEADERS, timeout=60)
-    r.raise_for_status()
-    return r.content
-
-def extract_text_from_bytes(url: str, content: bytes) -> str:
-    lower = url.lower()
-    if lower.endswith(".pdf"):
-        return extract_text_from_pdf(content)
-    if lower.endswith(".docx"):
-        return extract_text_from_docx(content)
-    return ""  # .doc best-effort skipped here
-
-def main():
-    state = load_state()
-    seen = set(state.get("seen_urls", []))
-
-    top_links = get_minutes_links()
-    # Only process new docs
-    new_docs = [d for d in top_links if d["url"] not in seen]
-
-    results = []
-    for d in tqdm(new_docs, desc="Scanning documents"):
-        try:
-            content = download(d["url"])
-            text = extract_text_from_bytes(d["url"], content)
-            if not text.strip():
-                continue
-            mentions = find_preschool_mentions(text)
-            if mentions:
-                results.append({
-                    "title": d["title"],
-                    "url": d["url"],
-                    "mentions": mentions
-                })
-            time.sleep(2)  # politeness
-        except Exception as e:
-            print(f"Error processing {d['url']}: {e}")
-
-    # Update state to include everything seen (so we don’t reprocess)
-    all_urls = list(seen.union({d["url"] for d in top_links}))
-    state["seen_urls"] = all_urls
-    save_state(state)
-
-    subject = f"Delran BOE – Preschool Mentions ({datetime.now().strftime('%B %Y')})"
-    html = render_html_report(results)
-
-    # SMTP config from env vars / repo secrets
-    to_addr   = os.environ.get("REPORT_TO", "robwaz@delrankids.net")
-    from_addr = os.environ.get("REPORT_FROM")          # e.g., notifications@yourdomain.com
-    smtp_host = os.environ.get("SMTP_HOST")            # e.g., smtp.office365.com
-    smtp_port = int(os.environ.get("SMTP_PORT", "587"))# 587 for STARTTLS
-    smtp_user = os.environ.get("SMTP_USER")
-    smtp_pass = os.environ.get("SMTP_PASS")
-
-    if not all([from_addr, smtp_host, smtp_user, smtp_pass]):
-        print("Missing SMTP config. Write HTML to last_report.html for debug.")
-        with open("last_report.html", "w", encoding="utf-8") as f:
-            f.write(html)
-        return
-
-    send_email(
-        subject=subject,
-        html_body=html,
-        to_addr=to_addr,
-        from_addr=from_addr,
-        smtp_host=smtp_host,
-        smtp_port=smtp_port,
-        smtp_user=smtp_user,
-        smtp_password=smtp_pass,
-    )
-    print("Report emailed.")
-
-if __name__ == "__main__":
-    main()
