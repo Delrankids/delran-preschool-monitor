@@ -3,13 +3,4 @@
   run: |
     set -euo pipefail
     python -m pip install --upgrade pip
-    if [ -f scripts/requirements.txt ]; then
-      REQ="scripts/requirements.txt"
-    elif [ -f requirements.txt ]; then
-      REQ="requirements.txt"
-    else
-      echo "ERROR: No requirements.txt found at scripts/requirements.txt or requirements.txt"
-      exit 1
-    fi
-    echo "Installing from $REQ"
-    pip install -r "$REQ"
+    pip install -r requirements.txt
