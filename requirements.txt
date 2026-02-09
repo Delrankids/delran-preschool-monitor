@@ -1,0 +1,6 @@
+requests
+beautifulsoup4
+lxml
+pypdf2
+python-docx
+tqdm
