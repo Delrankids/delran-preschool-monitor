@@ -1,1 +1,236 @@
+name: Delran BOE Preschool Monitor (Monthly)
 
+on:
+  schedule:
+    # Run on days 28-31 at 13:00 UTC and self-filter to only run on the month's last day
+    - cron: '0 13 28-31 * *'
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: 'Run immediate backfill from 2021-01-01 to today'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false','true']
+      ignore_dedupe:
+        description: 'Ignore dedupe state and include all matches'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false','true']
+      max_boarddocs_files:
+        description: 'Max BoardDocs PDFs to process'
+        required: false
+        default: '50'
+        type: string
+
+concurrency:
+  group: monthly-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write   # Required for OIDC with azure/login
+
+jobs:
+  monthly:
+    name: Build report, upload to OneDrive, and email results
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine date range
+        id: daterange
+        shell: bash
+        run: |
+          TODAY_UTC=$(date -u +%F)
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.backfill }}" == "true" ]]; then
+            START_DATE="2021-01-01"
+            END_DATE="$TODAY_UTC"
+            MODE="backfill"
+          else
+            if [[ "${{ github.event_name }}" == "schedule" ]]; then
+              # Run only on the last day of the month.
+              if [[ $(date -u -d "$TODAY_UTC + 1 day" +%d) != "01" ]]; then
+                echo "Not the last day of month (UTC). Skipping the run."
+                echo "skip=true" >> $GITHUB_OUTPUT
+                exit 0
+              fi
+            fi
+            START_DATE=$(date -u -d "$(date -u +%Y-%m-01)" +%F)
+            END_DATE="$TODAY_UTC"
+            MODE="monthly"
+          fi
+          echo "skip=false" >> $GITHUB_OUTPUT
+          echo "start_date=$START_DATE" >> $GITHUB_OUTPUT
+          echo "end_date=$END_DATE" >> $GITHUB_OUTPUT
+          echo "mode=$MODE" >> $GITHUB_OUTPUT
+
+      - name: Set up Python
+        if: steps.daterange.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        if: steps.daterange.outputs.skip != 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build monthly report
+        if: steps.daterange.outputs.skip != 'true'
+        env:
+          START_DATE: ${{ steps.daterange.outputs.start_date }}
+          END_DATE: ${{ steps.daterange.outputs.end_date }}
+        run: |
+          MIN_YEAR=$(echo "$START_DATE" | cut -c1-4)
+          python scripts/preschool_monitor.py --start "$START_DATE" --end "$END_DATE" \
+                 --out-md report.md --out-html report.html --out-csv report.csv \
+                 --min-year "$MIN_YEAR" --max-boarddocs-files "${{ inputs.max_boarddocs_files || '50' }}" \
+                 $( [ "${{ inputs.ignore_dedupe }}" = 'true' ] && echo '--ignore-dedupe' )
+
+      - name: Commit dedupe state
+        if: steps.daterange.outputs.skip != 'true'
+        run: |
+          if git status --porcelain .data/seen.json | grep -q .; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .data/seen.json
+            git commit -m "chore: update seen.json for ${{ steps.daterange.outputs.mode }} run (${{ steps.daterange.outputs.start_date }} to ${{ steps.daterange.outputs.end_date }})"
+            git push
+          else
+            echo "No state changes to commit."
+
+      # ===== OneDrive Upload & Share Link =====
+      - name: Azure login (OIDC)
+        if: steps.daterange.outputs.skip != 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Upload reports & attachments to OneDrive and create share link
+        if: steps.daterange.outputs.skip != 'true'
+        id: onedrive
+        shell: bash
+        env:
+          ONEDRIVE_UPN: 'robwaz@delrankids.net'
+          BASE_PATH_HUMAN: 'Ai Agents/delran-preschool-monitor/BOA Files'
+        run: |
+          set -euo pipefail
+          TOKEN=$(az account get-access-token --resource-type ms-graph --query accessToken -o tsv)
+
+          ENC_BASE=$(python - <<'PY'
+import urllib.parse, sys
+print(urllib.parse.quote(sys.argv[1], safe='/-._~'))
+PY
+"$BASE_PATH_HUMAN")
+
+          Y=$(date -u -d "${{ steps.daterange.outputs.start_date }}" +%Y)
+          M=$(date -u -d "${{ steps.daterange.outputs.start_date }}" +%m)
+
+          BASE="https://graph.microsoft.com/v1.0/users/$ONEDRIVE_UPN/drive"
+
+          # Ensure base path exists
+          curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            -d '{"name":"'"$(basename "$BASE_PATH_HUMAN")"'","folder":{},"@microsoft.graph.conflictBehavior":"replace"}' \
+            "$BASE/root:/${ENC_BASE%/*}:/children" >/dev/null || true
+
+          # Ensure YEAR
+          curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            -d '{"name":"'"$Y"'","folder":{},"@microsoft.graph.conflictBehavior":"replace"}' \
+            "$BASE/root:/$ENC_BASE:/children" >/dev/null || true
+
+          # Ensure MONTH
+          curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            -d '{"name":"'"$M"'","folder":{},"@microsoft.graph.conflictBehavior":"replace"}' \
+            "$BASE/root:/$ENC_BASE/$Y:/children" >/dev/null || true
+
+          # Upload core reports
+          for f in report.md report.html report.csv; do
+            if [ -f "$f" ]; then
+              curl -sS -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @"$f" \
+                "$BASE/root:/$ENC_BASE/$Y/$M/$f:/content" >/dev/null
+            fi
+          done
+
+          # Upload PDFs
+          if [ -f .data/attachments.json ]; then
+            python - <<'PY' > _pdfs.txt
+import json, os
+try:
+    paths = json.load(open('.data/attachments.json'))
+except Exception:
+    paths = []
+for p in paths:
+    if p and os.path.exists(p) and p.lower().endswith('.pdf'):
+        print(p)
+PY
+            while read -r pdf; do
+              [ -n "$pdf" ] || continue
+              name=$(basename "$pdf")
+              curl -sS -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @"$pdf" \
+                "$BASE/root:/$ENC_BASE/$Y/$M/$name:/content" >/dev/null || true
+            done < _pdfs.txt
+          fi
+
+          # Create share link for the month folder (organization scope)
+          SHARE_JSON=$(curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            -d '{"type":"view","scope":"organization"}' \
+            "$BASE/root:/$ENC_BASE/$Y/$M:/createLink")
+
+          LINK=$(python - <<'PY'
+import json,sys
+try:
+  j=json.load(sys.stdin)
+  print(j.get('link',{}).get('webUrl',''))
+except Exception:
+  print('')
+PY <<< "$SHARE_JSON")
+
+          echo "share_url=$LINK" >> $GITHUB_OUTPUT
+
+          # Append link to reports
+          if [ -n "$LINK" ]; then
+            echo -e "\n\n**OneDrive (view) link for this month's folder:**\n$LINK\n" >> report.md
+            python - <<'PY'
+import sys
+link = sys.argv[1]
+html = open('report.html','r',encoding='utf-8').read()
+html = html.replace('</body></html>', f"<p><strong>OneDrive (view) link for this month's folder:</strong> <a href='{link}'>{link}</a></p></body></html>")
+open('report.html','w',encoding='utf-8').write(html)
+PY
+ "$LINK"
+          fi
+
+      - name: Email results (with attachments if any)
+        if: steps.daterange.outputs.skip != 'true'
+        shell: bash
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO: 'robwaz@delrankids.net'
+          SUBJECT: 'Delran BOE Preschool Mentions (New): ${{ steps.daterange.outputs.start_date }} to ${{ steps.daterange.outputs.end_date }}'
+        run: |
+          ATTACH_ARGS=""
+          if [ -f .data/attachments.json ]; then
+            python - <<'PY'
+import json, shlex
+try:
+    paths = json.load(open('.data/attachments.json'))
+except Exception:
+    paths = []
+print(' '.join('--attachment '+shlex.quote(p) for p in paths if p))
+PY
+          fi > attach_args.txt
+          EXTRA_ARGS=$(cat attach_args.txt)
+          python scripts/send_email.py --subject "$SUBJECT" \
+            --html-body report.html --text-body report.md \
+            --attachment report.md $EXTRA_ARGS
