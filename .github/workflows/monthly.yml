@@ -2,15 +2,16 @@ name: Delran Preschool Monitor (Monthly)
 
 on:
   schedule:
-    - cron: "0 12 1 * *"   # 12:00 UTC on the 1st (~7am ET)
+    - cron: "0 12 1 * *"   # 12:00 UTC on the 1st (~7:00 AM Eastern)
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write   # needed to push updated state.json back to the repo
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,18 +28,75 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run scraper
+      # Optional but highly recommended: fail fast if SMTP creds/port are wrong
+      - name: Test SMTP connectivity (quick)
         env:
-          REPORT_TO: ${{ secrets.REPORT_TO }}
-          REPORT_FROM: ${{ secrets.REPORT_FROM }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          # Fallbacks so either naming works
+          SMTP_USER: ${{ secrets.SMTP_USER || secrets.SMTP_USERNAME }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS || secrets.SMTP_PASSWORD }}
         run: |
-          python scripts/scraper.py
+          python - <<'PY'
+          import os, smtplib, ssl, sys
+          host = os.environ.get("SMTP_HOST")
+          port = int(os.environ.get("SMTP_PORT", "587"))
+          user = os.environ.get("SMTP_USER")
+          pwd  = os.environ.get("SMTP_PASS")
+
+          if not all([host, port, user, pwd]):
+              print("SMTP test: missing one or more SMTP_* secrets.")
+              sys.exit(1)
+
+          try:
+              if port == 465:
+                  with smtplib.SMTP_SSL(host, port, timeout=30) as s:
+                      s.login(user, pwd)
+              else:
+                  with smtplib.SMTP(host, port, timeout=30) as s:
+                      s.starttls(context=ssl.create_default_context())
+                      s.login(user, pwd)
+              print("SMTP connectivity OK.")
+          except Exception as e:
+              print("SMTP connectivity FAILED:", e)
+              sys.exit(1)
+          PY
+
+      - name: Run scraper
+        env:
+          PYTHONUNBUFFERED: "1"  # show Python prints in real time
+          REPORT_TO:   ${{ secrets.REPORT_TO }}
+          # allow either REPORT_FROM or MAIL_FROM
+          REPORT_FROM: ${{ secrets.REPORT_FROM || secrets.MAIL_FROM }}
+          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          # allow either SMTP_USER or SMTP_USERNAME
+          SMTP_USER:   ${{ secrets.SMTP_USER || secrets.SMTP_USERNAME }}
+          # allow either SMTP_PASS or SMTP_PASSWORD
+          SMTP_PASS:   ${{ secrets.SMTP_PASS || secrets.SMTP_PASSWORD }}
+        run: |
+          python -u scripts/scraper.py
+
+      # Always show what's in the workspace after the run (helps if nothing was created)
+      - name: Debug workspace (list files and show script heads)
+        if: always()
+        run: |
+          echo "PWD: $(pwd)"
+          echo "==== Repo root ===="
+          ls -la
+          echo "==== scripts/ ===="
+          ls -la scripts || true
+          echo "==== scripts/scraper.py (first 120 lines) ===="
+          nl -ba scripts/scraper.py | sed -n '1,120p' || true
+          echo "==== scripts/email_utils.py (first 80 lines) ===="
+          nl -ba scripts/email_utils.py | sed -n '1,80p' || true
+          echo "==== scripts/parser_utils.py (first 80 lines) ===="
+          nl -ba scripts/parser_utils.py | sed -n '1,80p' || true
+          echo "==== Files generated after run ===="
+          ls -la
 
       - name: Commit updated state.json
+        if: always()
         run: |
           if [ -f state.json ]; then
             git config user.name "github-actions[bot]"
