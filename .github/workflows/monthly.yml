@@ -2,7 +2,7 @@ name: Delran BOE Preschool Monitor (Monthly)
 
 on:
   schedule:
-    # Run at 13:00 UTC on days 28-31 and self-skip unless it's the last day of the month
+    # Run at 13:00 UTC on days 28–31; job self-skips unless it's the last UTC day of the month.
     - cron: '0 13 28-31 * *'
   workflow_dispatch:
     inputs:
@@ -35,69 +35,3 @@ permissions:
 
 jobs:
   monthly:
-    name: Build report, upload to OneDrive, and email results
-    runs-on: ubuntu-latest
-
-    env:
-      # Default for max files if not provided by the manual dispatch UI
-      MAX_FILES: ${{ inputs.max_boarddocs_files || '50' }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Determine date range
-        id: daterange
-        shell: bash
-        run: |
-          set -euo pipefail
-          TODAY_UTC="$(date -u +%F)"
-
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.backfill }}" == "true" ]]; then
-            START_DATE="2021-01-01"
-            END_DATE="$TODAY_UTC"
-            MODE="backfill"
-          else
-            if [[ "${{ github.event_name }}" == "schedule" ]]; then
-              # Only continue on the last UTC day of the month
-              if [[ $(date -u -d "$TODAY_UTC + 1 day" +%d) != "01" ]]; then
-                echo "Not the last day of month (UTC). Skipping the run."
-                echo "skip=true" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-            fi
-            START_DATE="$(date -u -d "$(date -u +%Y-%m-01)" +%F)"
-            END_DATE="$TODAY_UTC"
-            MODE="monthly"
-          fi
-
-          {
-            echo "skip=false"
-            echo "start_date=$START_DATE"
-            echo "end_date=$END_DATE"
-            echo "mode=$MODE"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Set up Python
-        if: steps.daterange.outputs.skip != 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install dependencies
-        if: steps.daterange.outputs.skip != 'true'
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r scripts/requirements.txt
-
-      - name: Build monthly report
-        if: steps.daterange.outputs.skip != 'true'
-        shell: bash
-        env:
-          START_DATE: ${{ steps.daterange.outputs.start_date }}
-          END_DATE: ${{ steps.daterange.outputs.end_date }}
-        run: |
-          set -euo pipefail
-          MIN_YEAR="$(echo "$START_DATE" | cut -c1-4)"
-          EXTRA=""
