@@ -1,14 +1,6 @@
-# HTTP + downloads
 requests==2.32.3
-
-# HTML parsing
 beautifulsoup4==4.12.3
 lxml==5.2.1
-
-# PDF processing
 PyPDF2==3.0.1
 pdfminer.six==20231228
-
-# Utilities
 markdown-it-py==3.0.0
-``
