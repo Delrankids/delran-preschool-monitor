@@ -1,63 +1,121 @@
-name: Delran BOE Preschool Monitor (Monthly)
+name: Delran Preschool Monitor (Monthly)
 
 on:
   schedule:
-    # Run at 13:00 UTC on days 28–31; job self-skips unless it's the last UTC day of the month.
-    - cron: '0 13 28-31 * *'
+    - cron: "0 12 1 * *"   # 12:00 UTC on the 1st (~7:00 AM Eastern)
   workflow_dispatch:
-    inputs:
-      backfill:
-        description: 'Run immediate backfill from 2021-01-01 to today'
-        required: false
-        default: 'false'
-        type: choice
-        options: ['false','true']
-      ignore_dedupe:
-        description: 'Ignore dedupe state and include all matches'
-        required: false
-        default: 'false'
-        type: choice
-        options: ['false','true']
-      max_boarddocs_files:
-        description: 'Max BoardDocs PDFs to process'
-        required: false
-        default: '50'
-        type: string
-
-concurrency:
-  group: monthly-${{ github.ref }}
-  cancel-in-progress: false
 
 permissions:
-  contents: write      # to commit .data/seen.json
-  id-token: write      # for OIDC with azure/login
+  contents: write   # needed to push updated state.json back to the repo
 
 jobs:
-  monthly:
-    name: Build report, upload to OneDrive, and email results
+  run:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # ensure git history so we can commit back
 
-      - name: Determine date range
-        id: daterange
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Test SMTP connectivity (quick)
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         shell: bash
         run: |
-          set -euo pipefail
-          TODAY_UTC="$(date -u +%F)"
+          python - <<'PY'
+          import os, smtplib, ssl, sys
+          host = os.environ.get("SMTP_HOST")
+          port = int(os.environ.get("SMTP_PORT") or "587")
+          user = os.environ.get("SMTP_USER") or os.environ.get("SMTP_USERNAME")
+          pwd  = os.environ.get("SMTP_PASS") or os.environ.get("SMTP_PASSWORD")
+          if not all([host, port, user, pwd]):
+              print("SMTP test: missing one or more SMTP_* secrets.")
+              print("Host:", bool(host), "Port:", port, "User:", bool(user), "Pass:", bool(pwd))
+              sys.exit(1)
+          try:
+              if port == 465:
+                  with smtplib.SMTP_SSL(host, port, timeout=30) as s:
+                      s.login(user, pwd)
+              else:
+                  with smtplib.SMTP(host, port, timeout=30) as s:
+                      s.starttls(context=ssl.create_default_context())
+                      s.login(user, pwd)
+              print("SMTP connectivity OK.")
+          except Exception as e:
+              print("SMTP connectivity FAILED:", e)
+              sys.exit(1)
+          PY
 
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.backfill }}" == "true" ]]; then
-            START_DATE="2021-01-01"
-            END_DATE="$TODAY_UTC"
-            MODE="backfill"
+      - name: Run scraper
+        env:
+          PYTHONUNBUFFERED: "1"
+          REPORT_TO:   ${{ secrets.REPORT_TO }}
+
+          # pass both possible names; scraper.py has fallbacks
+          REPORT_FROM: ${{ secrets.REPORT_FROM }}
+          MAIL_FROM:   ${{ secrets.MAIL_FROM }}
+
+          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+
+          SMTP_USER:     ${{ secrets.SMTP_USER }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+
+          SMTP_PASS:     ${{ secrets.SMTP_PASS }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: |
+          python -u scripts/scraper.py
+
+      - name: Debug workspace (list files and show script heads)
+        if: always()
+        run: |
+          echo "PWD: $(pwd)"
+          echo "==== Repo root ===="
+          ls -la
+          echo "==== scripts/ ===="
+          ls -la scripts || true
+          echo "==== scripts/scraper.py (first 120 lines) ===="
+          nl -ba scripts/scraper.py | sed -n '1,120p' || true
+          echo "==== scripts/email_utils.py (first 80 lines) ===="
+          nl -ba scripts/email_utils.py | sed -n '1,80p' || true
+          echo "==== scripts/parser_utils.py (first 80 lines) ===="
+          nl -ba scripts/parser_utils.py | sed -n '1,80p' || true
+          echo "==== Files generated after run ===="
+          ls -la
+
+      - name: Commit updated state.json
+        if: always()
+        run: |
+          if [ -f state.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add state.json
+            git commit -m "chore: update state.json [skip ci]" || echo "No changes to commit."
+            git push
           else
-            if [[ "${{ github.event_name }}" == "schedule" ]]; then
-              # Only continue on the last UTC day of the month
-              if [[ $(date -u -d "$TODAY_UTC + 1 day" +%d) != "01" ]]; then
-                echo "Not the last day of month (UTC). Skipping the run."
-                echo "skip=true" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-            fi
+            echo "state.json not found; scraper may have failed before creating it."
+          fi
+
+      - name: Upload HTML (if email disabled)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: last_report
+          path: last_report.html
+          if-no-files-found: ignore
