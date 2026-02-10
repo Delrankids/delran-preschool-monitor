@@ -1,6 +1,6 @@
-requests==2.32.3
-beautifulsoup4==4.12.3
-lxml==5.2.1
-PyPDF2==3.0.1
-pdfminer.six==20231228
-markdown-it-py==3.0.0
+requests
+beautifulsoup4
+lxml
+pypdf2
+python-docx
+tqdm
