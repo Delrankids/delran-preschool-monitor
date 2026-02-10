@@ -1,0 +1,46 @@
+name: Delran Preschool Monitor (Smoke Test)
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      - name: Run scraper (no email)
+        env:
+          # Disable dedupe to ensure output appears even if state exists
+          IGNORE_DEDUPE: "1"
+          # Narrow BoardDocs to keep smoke run quick
+          MAX_BOARDDOCS_FILES: "5"
+          # Force monthly behavior; state starts fresh
+          MIN_YEAR: "2021"
+        run: |
+          python -u scripts/scraper.py || true
+
+      - name: Check artifacts exist
+        run: |
+          test -s last_report.html
+          test -s report.csv
+          echo "Artifacts present."
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-artifacts
+          path: |
+            last_report.html
+            report.csv
+          if-no-files-found: error
