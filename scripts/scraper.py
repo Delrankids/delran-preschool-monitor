@@ -1,15 +1,14 @@
-rows = []
-    # Limit the list to 200 lines in email to keep it readable; full list is in scanned.csv
-    MAX_EMAIL_ROWS = 200
-    for i, r in enumerate(scanned_log):
-        if i >= MAX_EMAIL_ROWS:
-            rows.append(f'<li><em>…and {len(scanned_log) - MAX_EMAIL_ROWS} more (see scanned.csv)</em></li>')
-            break
-        date_html = f"{r['date']} — " if r.get("date") else ""
-        url = (r.get("url") or "").replace('"', '&quot;')
-        title = (r.get("title") or "Document").replace("<", "&lt;").replace(">", "&gt;")
-        rows.append(
-            f'<li><strong>{r["status"]}</strong> — {date_html}{title} — '
-            f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a> '
-            f'(<em>{(r.get("reason") or "").replace("<","&lt;").replace(">","&gt;")}</em>)</li>'
-        )
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        # Always leave an artifact with the traceback so we can see what happened
+        with open("last_report.html", "w", encoding="utf-8") as f:
+            f.write(f"""<html><body>
+            <h2>Delran BOE – Monitor: Unhandled Error</h2>
+            <pre style="white-space: pre-wrap; font-family: monospace;">{tb}</pre>
+            </body></html>""")
+        print("Unhandled error; traceback written to last_report.html")
+        raise
