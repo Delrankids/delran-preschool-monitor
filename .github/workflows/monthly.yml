@@ -53,7 +53,6 @@ jobs:
             echo "is_last_day=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Guard against stray Markdown backticks in Python sources
       - name: Guard against stray Markdown backticks
         if: steps.lastday.outputs.is_last_day == 'true'
         shell: bash
@@ -65,23 +64,16 @@ jobs:
             exit 1
           fi
 
-      # Compile only the maintained files (avoid tripping on legacy or experimental files)
       - name: Python syntax check (py_compile)
         if: steps.lastday.outputs.is_last_day == 'true'
         shell: bash
         run: |
           set -e
           python - <<'PY'
-          import py_compile, sys
-          targets = [
-              "scripts/email_utils.py",
-              "scripts/parser_utils.py",
-              "scripts/scraper.py",
-              "scripts/send_email.py",
-              "scripts/preschool_monitor.py",  # now a safe stub
-          ]
-          print("Checking:", targets)
-          for f in targets:
+          import sys, py_compile, glob
+          files = sorted(glob.glob("scripts/*.py"))
+          print("Checking:", files)
+          for f in files:
               py_compile.compile(f, doraise=True)
               print("OK  ", f)
           PY
@@ -155,8 +147,6 @@ jobs:
           nl -ba scripts/email_utils.py | sed -n '1,160p' || true
           echo "==== scripts/parser_utils.py (first 160 lines) ===="
           nl -ba scripts/parser_utils.py | sed -n '1,160p' || true
-          echo "==== scripts/preschool_monitor.py (first 60 lines) ===="
-          nl -ba scripts/preschool_monitor.py | sed -n '1,60p' || true
           echo "==== Files generated after run ===="
           ls -la
           echo "==== .debug/ (if exists) ===="
