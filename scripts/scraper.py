@@ -55,14 +55,6 @@ import requests
 from bs4 import BeautifulSoup
 from dateutil import parser as dateparser
 
-from parser_utils import (
-    extract_text_from_pdf,
-    extract_text_from_docx,
-    find_preschool_mentions,
-    guess_meeting_date,
-)
-from email_utils import send_email, render_html_report
-
 # ----------------------------------------------------------------------------
 # Config
 # ----------------------------------------------------------------------------
@@ -130,6 +122,10 @@ def sha1_of(*parts: str) -> str:
     for p in parts:
         h.update((p or "").encode("utf-8", "ignore"))
     return h.hexdigest()
+
+
+def html_escape(s: str) -> str:
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 # ----------------------------------------------------------------------------
@@ -271,22 +267,26 @@ def extract_text_for_url(item: Dict[str, str]) -> str:
                 inner_ctype = (inner.headers.get("Content-Type") or "").lower()
                 if "application/pdf" in inner_ctype or inner_url.lower().endswith(".pdf"):
                     polite_delay()
-                    return extract_text_from_pdf(inner.content)
+                    from parser_utils import extract_text_from_pdf as _pf
+                    return _pf(inner.content)
                 elif inner_url.lower().endswith(".docx"):
                     polite_delay()
-                    return extract_text_from_docx(inner.content)
+                    from parser_utils import extract_text_from_docx as _dx
+                    return _dx(inner.content)
         # fallback: use visible page text
         return " ".join(s.strip() for s in soup.stripped_strings)
 
     # If PDF
     if "application/pdf" in ctype or path_guess.endswith(".pdf"):
         polite_delay()
-        return extract_text_from_pdf(resp.content)
+        from parser_utils import extract_text_from_pdf as _pf
+        return _pf(resp.content)
 
     # If DOCX
     if path_guess.endswith(".docx"):
         polite_delay()
-        return extract_text_from_docx(resp.content)
+        from parser_utils import extract_text_from_docx as _dx
+        return _dx(resp.content)
 
     # Unknown/other
     return ""
@@ -335,15 +335,18 @@ def within_range(iso_dt: Optional[str], start: datetime, end: datetime) -> bool:
         return True
 
 
-def html_escape(s: str) -> str:
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-
-
 # ----------------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------------
 
 def main():
+    # Defer heavy imports so outer catcher writes last_report.html for import errors too
+    from parser_utils import (
+        find_preschool_mentions,
+        guess_meeting_date,
+    )
+    from email_utils import send_email, render_html_report
+
     state = load_state()
     start, end, is_backfill = compute_run_range(state)
     logging.info("Date range: %s -> %s (backfill=%s)", start.date(), end.date(), is_backfill)
@@ -475,3 +478,120 @@ def main():
     # Write scanned.csv
     with open("scanned.csv", "w", encoding="utf-8", newline="") as sf:
         w = csv.writer(sf)
+        w.writerow(["date", "source", "title", "url", "status", "reason"])
+        status_rank = {"matched": 0, "scanned": 1, "skipped": 2, "error": 3}
+        def s_key(x):
+            return (status_rank.get(x.get("status","skipped"), 9),
+                    x.get("date") or "", x.get("title") or "")
+        for row in sorted(scanned_log, key=s_key):
+            w.writerow([
+                row.get("date") or "",
+                row.get("source") or "",
+                row.get("title") or "",
+                row.get("url") or "",
+                row.get("status") or "",
+                row.get("reason") or "",
+            ])
+
+    # Build main HTML (matches)
+    html_report = render_html_report(results_for_email)
+
+    # Append a "Documents scanned" section
+    total_counts = {
+        "matched": sum(1 for x in scanned_log if x["status"] == "matched"),
+        "scanned": sum(1 for x in scanned_log if x["status"] == "scanned"),
+        "skipped": sum(1 for x in scanned_log if x["status"] == "skipped"),
+        "error":   sum(1 for x in scanned_log if x["status"] == "error"),
+        "total":   len(scanned_log),
+    }
+    rows_html = []
+    MAX_EMAIL_ROWS = 200  # keep email readable; full details are in scanned.csv
+    for i, r in enumerate(scanned_log):
+        if i >= MAX_EMAIL_ROWS:
+            rows_html.append(f'<li><em>…and {len(scanned_log) - MAX_EMAIL_ROWS} more (see scanned.csv)</em></li>')
+            break
+        date_html = (r.get("date") + " — ") if r.get("date") else ""
+        url = html_escape(r.get("url") or "")
+        title = html_escape(r.get("title") or "Document")
+        reason = html_escape(r.get("reason") or "")
+        rows_html.append(
+            f'<li><strong>{r.get("status","")}</strong> — {date_html}{title} — '
+            f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a> '
+            f'(<em>{reason}</em>)</li>'
+        )
+    scanned_section = f"""
+    <hr>
+    <details>
+      <summary><strong>Documents scanned</strong> — total {total_counts['total']} (matched: {total_counts['matched']}, scanned/no-hit: {total_counts['scanned']}, skipped: {total_counts['skipped']}, error: {total_counts['error']})</summary>
+      <p>Full audit log is attached as <code>scanned.csv</code> in workflow artifacts.</p>
+      <ol style="margin-top: 6px;">
+        {''.join(rows_html)}
+      </ol>
+    </details>
+    """
+
+    html_report_full = html_report.replace("</body>", scanned_section + "\n</body>")
+
+    with open("last_report.html", "w", encoding="utf-8") as f:
+        f.write(html_report_full)
+
+    # Update state
+    if not IGNORE_DEDUPE and new_hashes:
+        state["seen_hashes"] = sorted(set(state.get("seen_hashes") or []) | new_hashes)
+    if is_backfill:
+        state["backfill_done"] = True
+    state["last_run_end"] = end.isoformat()
+    save_state(state)
+
+    # Email
+    to_addr = os.environ.get("REPORT_TO") or "robwaz@delrankids.net"
+    from_addr = os.environ.get("REPORT_FROM") or os.environ.get("MAIL_FROM")
+    smtp_host = os.environ.get("SMTP_HOST")
+    smtp_port = int(os.environ.get("SMTP_PORT") or "587")
+    smtp_user = os.environ.get("SMTP_USER") or os.environ.get("SMTP_USERNAME")
+    smtp_password = os.environ.get("SMTP_PASS") or os.environ.get("SMTP_PASSWORD")
+
+    can_send = all([to_addr, from_addr, smtp_host, smtp_port, smtp_user, smtp_password])
+    if not can_send:
+        logging.warning("Email not sent (missing SMTP or from/to). See artifacts for last_report.html, report.csv, and scanned.csv.")
+        print(f"Report created. Matches: {sum(len(r['mentions']) for r in results_for_email)}; items: {len(results_for_email)}; scanned_total: {len(scanned_log)}")
+        return
+
+    # Subject line
+    if is_backfill:
+        subject = f"Delran BOE – Preschool Mentions (Backfill {datetime(2021,1,1).date()} → {end.date()})"
+    else:
+        subject = f"Delran BOE – Preschool Mentions ({start.date().isoformat()[:7]}) Monthly Report"
+
+    send_email(
+        subject=subject,
+        html_body=html_report_full,
+        to_addr=to_addr,
+        from_addr=from_addr,
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        smtp_user=smtp_user,
+        smtp_password=smtp_password,
+    )
+
+    print(f"Email sent to {to_addr}. Matches: {sum(len(r['mentions']) for r in results_for_email)}; items: {len(results_for_email)}; scanned_total: {len(scanned_log)}")
+
+
+# ----------------------------------------------------------------------------
+# Entry point with final-resort catcher
+# ----------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()
+        # Leave an artifact with traceback for debugging
+        with open("last_report.html", "w", encoding="utf-8") as f:
+            f.write(f"""<html><body>
+            <h2>Delran BOE – Monitor: Unhandled Error</h2>
+            <pre style="white-space: pre-wrap; font-family: monospace;">{tb}</pre>
+            </body></html>""")
+        print("Unhandled error; traceback written to last_report.html")
+        raise
