@@ -85,7 +85,7 @@ def render_html_report(results: List[Dict]) -> str:
                     <p><strong>Title:</strong> {title_esc}</p>
                     {date_html}
                     <p><strong>URL:</strong>
-                        <a href="{url_esc}" target="_blank" rel="noopener noreferrer">{url_esc}</a>
+                        <a href="{url_esc}">{url_esc}</a>
                     </p>
                     <ul>{snippet_items}</ul>
                 </li>
@@ -112,3 +112,4 @@ def render_html_report(results: List[Dict]) -> str:
   </body>
 </html>
 """.strip()
+``
