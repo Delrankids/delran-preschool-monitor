@@ -340,7 +340,7 @@ def within_range(iso_dt: Optional[str], start: datetime, end: datetime) -> bool:
 # ----------------------------------------------------------------------------
 
 def main():
-    # Defer heavy imports so outer catcher writes last_report.html for import errors too
+    # Defer imports so outer catcher writes last_report.html for import errors too
     from parser_utils import (
         find_preschool_mentions,
         guess_meeting_date,
@@ -516,7 +516,7 @@ def main():
         reason = html_escape(r.get("reason") or "")
         rows_html.append(
             f'<li><strong>{r.get("status","")}</strong> — {date_html}{title} — '
-            f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a> '
+            f'<a href="{url}">{url}</a> '
             f'(<em>{reason}</em>)</li>'
         )
     scanned_section = f"""
