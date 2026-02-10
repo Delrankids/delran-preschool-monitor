@@ -1,5 +1,3 @@
-# NOTE: keep this file plain ASCII; do not paste Markdown fences (```) here.
-
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -97,7 +95,7 @@ def render_html_report(results: List[Dict]) -> str:
 
         body_html = "<ol>" + "".join(items) + "</ol>"
 
-    # Wrap in complete HTML (keep this compact and simple)
+    # Wrap in complete HTML (kept compact and simple)
     html = (
         "<!DOCTYPE html>"
         "<html>"
