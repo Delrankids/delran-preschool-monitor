@@ -19,7 +19,6 @@ def send_email(
     Sends an HTML email using STARTTLS (587) or implicit SSL (465).
     Supports comma- or semicolon-separated recipients in `to_addr`.
     """
-
     # Normalize recipients
     recipients = [x.strip() for x in (to_addr or "").replace(";", ",").split(",") if x.strip()]
     if not recipients:
@@ -61,7 +60,6 @@ def render_html_report(results: List[Dict]) -> str:
         "mentions": [{"keyword": str, "snippet": str}, ...]
       }
     """
-
     if not results:
         body = "<p>No preschool-related mentions were found in this period’s BOE minutes.</p>"
     else:
@@ -80,36 +78,35 @@ def render_html_report(results: List[Dict]) -> str:
             )
 
             rows.append(
-                f"""
-                <li style="margin-bottom: 20px;">
-                    <p><strong>Title:</strong> {title_esc}</p>
-                    {date_html}
-                    <p><strong>URL:</strong>
-                        <a href="{url_esc}">{url_esc}</a>
-                    </p>
-                    <ul>{snippet_items}</ul>
-                </li>
-                """.strip()
+                (
+                    "<li style=\"margin-bottom: 20px;\">"
+                    f"<p><strong>Title:</strong> {title_esc}</p>"
+                    f"{date_html}"
+                    f"<p><strong>URL:</strong> "
+                    f"<a href=\"{url_esc}\" target=\"_blank\" rel=\"noopener noreferrer\">{url_esc}</a>"
+                    f"</p>"
+                    f"<ul>{snippet_items}</ul>"
+                    "</li>"
+                )
             )
 
         body = f"<ol>{''.join(rows)}</ol>"
 
     # Wrap in complete HTML
-    return f"""\
-<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Delran BOE – Preschool Mentions</title>
-  </head>
-  <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #222;">
-    <h2>Delran BOE – Preschool Mentions (Monthly Report)</h2>
-    {body}
-    <hr>
-    <p style="color: #888; font-size: 12px;">
-      This report was generated automatically by your Delran Preschool Monitor.
-    </p>
-  </body>
-</html>
-""".strip()
-``
+    return (
+        "<!DOCTYPE html>"
+        "<html>"
+        "  <head>"
+        '    <meta charset="utf-8" />'
+        "    <title>Delran BOE – Preschool Mentions</title>"
+        "  </head>"
+        '  <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #222;">'
+        "    <h2>Delran BOE – Preschool Mentions (Monthly Report)</h2>"
+        f"    {body}"
+        "    <hr>"
+        '    <p style="color: #888; font-size: 12px;">'
+        "      This report was generated automatically by your Delran Preschool Monitor."
+        "    </p>"
+        "  </body>"
+        "</html>"
+    )
