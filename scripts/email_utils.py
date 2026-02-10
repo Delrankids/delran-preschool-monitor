@@ -16,12 +16,11 @@ def send_email(
 ):
     """
     Sends an HTML email using STARTTLS (587) or implicit SSL (465).
-    Supports comma-separated recipients in `to_addr`.
+    Supports comma- or semicolon-separated recipients in `to_addr`.
     """
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = from_addr
-    # Support multiple recipients separated by comma/semicolon
     recipients = [x.strip() for x in to_addr.replace(";", ",").split(",") if x.strip()]
     msg["To"] = ", ".join(recipients)
     msg.set_content("This email requires an HTML-compatible client.")
@@ -62,12 +61,14 @@ def render_html_report(results: List[Dict]) -> str:
                 f"<li><strong>{m['keyword']}</strong>: {m['snippet']}</li>"
                 for m in r.get("mentions", [])
             )
+            url = r.get("url") or ""
+            title = r.get("title") or "Meeting Item"
             rows.append(f"""
                 <li style="margin-bottom: 20px;">
-                    <p><strong>Title:</strong> {r.get('title') or 'Meeting Item'}</p>
+                    <p><strong>Title:</strong> {title}</p>
                     {date_html}
                     <p><strong>URL:</strong>
-                        <a href="{r['url']}" target="_blank" rel="noopener noreferrer">{r['url']}</a>
+                        <a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>
                     </p>
                     <ul>{snippet_items}</ul>
                 </li>
