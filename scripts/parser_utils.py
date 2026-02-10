@@ -30,9 +30,7 @@ KEYWORD_REGEX = re.compile("|".join(PRESCHOOL_PATTERNS), re.IGNORECASE)
 
 
 def extract_text_from_pdf(content: bytes) -> str:
-    """
-    Extracts concatenated text from all pages of a PDF.
-    """
+    """Extracts concatenated text from all pages of a PDF."""
     reader = PdfReader(BytesIO(content))
     texts = []
     for page in reader.pages:
@@ -45,17 +43,13 @@ def extract_text_from_pdf(content: bytes) -> str:
 
 
 def extract_text_from_docx(content: bytes) -> str:
-    """
-    Extract text from a .docx file.
-    """
+    """Extract text from a .docx file."""
     doc = Document(BytesIO(content))
     return "\n".join(p.text for p in doc.paragraphs)
 
 
 def find_preschool_mentions(text: str, context_chars: int = 160) -> List[Dict]:
-    """
-    Returns a list of {"keyword": <str>, "snippet": <str>}.
-    """
+    """Return list of dicts with keyword + snippet."""
     mentions = []
     if not text:
         return mentions
@@ -70,7 +64,8 @@ def find_preschool_mentions(text: str, context_chars: int = 160) -> List[Dict]:
     return mentions
 
 
-# Date patterns for meeting inference
+# ---- Date Recognition -----------------------------------------------
+
 DATE_PATTERNS = [
     r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b",
     r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",
@@ -82,10 +77,10 @@ DATE_REGEXES = [re.compile(p, re.IGNORECASE) for p in DATE_PATTERNS]
 
 
 def guess_meeting_date(text: str, title: str = "", url: str = "") -> Optional[datetime]:
-    """
-    Best-effort date inference from document text/title/url.
-    """
+    """Best-effort date inference from text/title/url."""
     candidates = [text or "", title or "", url or ""]
+
+    # Look for explicit dates in text/title/url
     for src in candidates:
         for rx in DATE_REGEXES:
             m = rx.search(src)
@@ -95,7 +90,7 @@ def guess_meeting_date(text: str, title: str = "", url: str = "") -> Optional[da
                 except Exception:
                     continue
 
-    # Fallback: /2023/09/ patterns
+    # Fallback: /2023/09/ patterns in URLs
     m = re.search(r"/(20\d{2})/(\d{1,2})/", url)
     if m:
         try:
@@ -105,4 +100,3 @@ def guess_meeting_date(text: str, title: str = "", url: str = "") -> Optional[da
             pass
 
     return None
-``
