@@ -23,8 +23,9 @@ PRESCHOOL_PATTERNS = [
     r"\btuition(?:-free)?\b",
     r"\blottery\b",
     r"\benrollment\b",
-    r"\bPEEA\b",  # NJ Preschool Expansion Aid acronym
+    r"\bPEEA\b"
 ]
+
 KEYWORD_REGEX = re.compile("|".join(PRESCHOOL_PATTERNS), re.IGNORECASE)
 
 
@@ -69,28 +70,32 @@ def find_preschool_mentions(text: str, context_chars: int = 160) -> List[Dict]:
     return mentions
 
 
-_DATE_PATTERNS = [
+# Date patterns for meeting inference
+DATE_PATTERNS = [
     r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b",
     r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",
     r"\b\d{4}-\d{2}-\d{2}\b",
     r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+\d{1,2},\s+\d{4}\b",
 ]
-_DATE_REGEXES = [re.compile(p, re.IGNORECASE) for p in _DATE_PATTERNS]
+
+DATE_REGEXES = [re.compile(p, re.IGNORECASE) for p in DATE_PATTERNS]
+
 
 def guess_meeting_date(text: str, title: str = "", url: str = "") -> Optional[datetime]:
     """
     Best-effort date inference from document text/title/url.
     """
-    srcs = [text or "", title or "", url or ""]
-    for source in srcs:
-        for rx in _DATE_REGEXES:
-            m = rx.search(source)
+    candidates = [text or "", title or "", url or ""]
+    for src in candidates:
+        for rx in DATE_REGEXES:
+            m = rx.search(src)
             if m:
                 try:
                     return dateparser.parse(m.group(0), dayfirst=False, fuzzy=True)
                 except Exception:
                     continue
-    # As a fallback, look for year in URL (e.g., /2023/09/)
+
+    # Fallback: /2023/09/ patterns
     m = re.search(r"/(20\d{2})/(\d{1,2})/", url)
     if m:
         try:
@@ -98,5 +103,5 @@ def guess_meeting_date(text: str, title: str = "", url: str = "") -> Optional[da
             return datetime(y, mo, 1)
         except Exception:
             pass
+
     return None
-``
