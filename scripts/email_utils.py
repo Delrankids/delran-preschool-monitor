@@ -1,3 +1,5 @@
+# NOTE: keep this file plain ASCII; do not paste Markdown fences (```) here.
+
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -61,52 +63,56 @@ def render_html_report(results: List[Dict]) -> str:
       }
     """
     if not results:
-        body = "<p>No preschool-related mentions were found in this period’s BOE minutes.</p>"
+        body_html = "<p>No preschool-related mentions were found in this period’s BOE minutes.</p>"
     else:
-        rows = []
+        items: List[str] = []
         for r in results:
-            # Defensive extraction + escaping
             url = r.get("url") or ""
-            url_esc = html_escape(url)
             title = r.get("title") or "Meeting Item"
+            date_val = r.get("date") or ""
+
+            url_esc = html_escape(url)
             title_esc = html_escape(title)
-            date_html = f"<p><strong>Date:</strong> {html_escape(r['date'])}</p>" if r.get("date") else ""
+            date_html = f"<p><strong>Date:</strong> {html_escape(date_val)}</p>" if date_val else ""
 
-            snippet_items = "".join(
-                f"<li><strong>{html_escape(m.get('keyword',''))}</strong>: {html_escape(m.get('snippet',''))}</li>"
-                for m in (r.get("mentions") or [])
+            # Mentions list
+            mention_li: List[str] = []
+            for m in (r.get("mentions") or []):
+                kw = html_escape(m.get("keyword", ""))
+                snip = html_escape(m.get("snippet", ""))
+                mention_li.append(f"<li><strong>{kw}</strong>: {snip}</li>")
+            mentions_html = "<ul>" + "".join(mention_li) + "</ul>" if mention_li else ""
+
+            # One result item
+            items.append(
+                "<li style=\"margin-bottom: 20px;\">"
+                f"<p><strong>Title:</strong> {title_esc}</p>"
+                f"{date_html}"
+                "<p><strong>URL:</strong> "
+                f"<a href=\"{url_esc}\" target=\"_blank\" rel=\"noopener noreferrer\">{url_esc}</a>"
+                "</p>"
+                f"{mentions_html}"
+                "</li>"
             )
 
-            rows.append(
-                (
-                    "<li style=\"margin-bottom: 20px;\">"
-                    f"<p><strong>Title:</strong> {title_esc}</p>"
-                    f"{date_html}"
-                    f"<p><strong>URL:</strong> "
-                    f"<a href=\"{url_esc}\" target=\"_blank\" rel=\"noopener noreferrer\">{url_esc}</a>"
-                    f"</p>"
-                    f"<ul>{snippet_items}</ul>"
-                    "</li>"
-                )
-            )
+        body_html = "<ol>" + "".join(items) + "</ol>"
 
-        body = f"<ol>{''.join(rows)}</ol>"
-
-    # Wrap in complete HTML
-    return (
+    # Wrap in complete HTML (keep this compact and simple)
+    html = (
         "<!DOCTYPE html>"
         "<html>"
-        "  <head>"
-        '    <meta charset="utf-8" />'
-        "    <title>Delran BOE – Preschool Mentions</title>"
-        "  </head>"
-        '  <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #222;">'
-        "    <h2>Delran BOE – Preschool Mentions (Monthly Report)</h2>"
-        f"    {body}"
-        "    <hr>"
-        '    <p style="color: #888; font-size: 12px;">'
-        "      This report was generated automatically by your Delran Preschool Monitor."
-        "    </p>"
-        "  </body>"
+        "<head>"
+        "<meta charset=\"utf-8\" />"
+        "<title>Delran BOE – Preschool Mentions</title>"
+        "</head>"
+        "<body style=\"font-family: Arial, sans-serif; line-height: 1.6; color: #222;\">"
+        "<h2>Delran BOE – Preschool Mentions (Monthly Report)</h2>"
+        f"{body_html}"
+        "<hr>"
+        "<p style=\"color: #888; font-size: 12px;\">"
+        "This report was generated automatically by your Delran Preschool Monitor."
+        "</p>"
+        "</body>"
         "</html>"
     )
+    return html
