@@ -1,16 +1,17 @@
 name: Delran Preschool Monitor (Monthly)
 
 on:
-  # Run between the 28th-31st at 12:00 UTC and gate to the actual last day-of-month
+  # Scheduled near end-of-month; the step below gates to the actual last day (UTC)
   schedule:
     - cron: "0 12 28-31 * *"
+  # Manual runs should just run
   workflow_dispatch:
     inputs:
       force:
-        description: "Run immediately (ignore last-day-of-month gate)"
+        description: "Run immediately (legacy switch; manual runs already run)"
         required: false
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write   # needed to push updated state.json back to the repo
@@ -39,8 +40,8 @@ jobs:
         id: lastday
         shell: bash
         run: |
-          FORCE="${{ github.event.inputs.force }}"
-          if [ "$FORCE" = "true" ]; then
+          # For manual runs, always true
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "is_last_day=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -53,6 +54,20 @@ jobs:
           else
             echo "is_last_day=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Python syntax check (py_compile)
+        if: steps.lastday.outputs.is_last_day == 'true'
+        shell: bash
+        run: |
+          set -e
+          python - <<'PY'
+          import sys, py_compile, glob
+          files = sorted(glob.glob("scripts/*.py"))
+          print("Checking:", files)
+          for f in files:
+              py_compile.compile(f, doraise=True)
+              print("OK  ", f)
+          PY
 
       - name: Test SMTP connectivity (quick)
         if: steps.lastday.outputs.is_last_day == 'true'
@@ -94,7 +109,7 @@ jobs:
         env:
           PYTHONUNBUFFERED: "1"
 
-          # Reporting (defaults are applied in the script if not set)
+          # Reporting (defaults applied in the script if not set)
           REPORT_TO:   ${{ secrets.REPORT_TO }}
           REPORT_FROM: ${{ secrets.REPORT_FROM }}
           MAIL_FROM:   ${{ secrets.MAIL_FROM }}
@@ -108,8 +123,8 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
 
           # Optional knobs preserved
-          MAX_BOARDDOCS_FILES: "50"     # matches prior behavior
-          MIN_YEAR: "2021"              # keep older filter if you want
+          MAX_BOARDDOCS_FILES: "50"
+          MIN_YEAR: "2021"
           DOC_DELAY_SECONDS: "2.0"
           REQUEST_TIMEOUT: "60"
         run: |
@@ -140,12 +155,12 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add state.json
             git commit -m "chore: update state.json [skip ci]" || echo "No changes to commit."
-            git push
+            git push || true
           else
             echo "state.json not found; scraper may have failed before creating it."
           fi
 
-      - name: Upload HTML & CSV (if email disabled or for archive)
+      - name: Upload HTML & CSVs (for archive or when email disabled)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -153,4 +168,5 @@ jobs:
           path: |
             last_report.html
             report.csv
+            scanned.csv
           if-no-files-found: ignore
