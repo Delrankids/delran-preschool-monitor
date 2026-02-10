@@ -6,7 +6,10 @@ from docx import Document
 from datetime import datetime
 from dateutil import parser as dateparser
 
-# Expanded patterns to better catch UPK/expansion topics
+# --------------------------------------------------------------------
+# Preschool-related keyword patterns
+# --------------------------------------------------------------------
+
 PRESCHOOL_PATTERNS = [
     r"\bpreschool\b",
     r"\bpre[\s-]?k\b",
@@ -29,47 +32,80 @@ PRESCHOOL_PATTERNS = [
 KEYWORD_REGEX = re.compile("|".join(PRESCHOOL_PATTERNS), re.IGNORECASE)
 
 
+# --------------------------------------------------------------------
+# PDF & DOCX text extraction
+# --------------------------------------------------------------------
+
 def extract_text_from_pdf(content: bytes) -> str:
-    """Extracts concatenated text from all pages of a PDF."""
+    """
+    Extract concatenated text from all pages of a PDF file.
+    Safe fallback: returns empty string for unreadable pages.
+    """
     reader = PdfReader(BytesIO(content))
     texts = []
     for page in reader.pages:
         try:
-            t = page.extract_text() or ""
-            texts.append(t)
+            text = page.extract_text() or ""
+            texts.append(text)
         except Exception:
             continue
     return "\n".join(texts)
 
 
 def extract_text_from_docx(content: bytes) -> str:
-    """Extract text from a .docx file."""
+    """
+    Extract text from a .docx file.
+    """
     doc = Document(BytesIO(content))
     return "\n".join(p.text for p in doc.paragraphs)
 
 
+# --------------------------------------------------------------------
+# Keyword detection with snippet context
+# --------------------------------------------------------------------
+
 def find_preschool_mentions(text: str, context_chars: int = 160) -> List[Dict]:
-    """Return list of dicts with keyword + snippet."""
+    """
+    Find all preschool-related keyword hits in text.
+
+    Returns a list of:
+    {
+        "keyword": "string matched",
+        "snippet": "surrounding context"
+    }
+    """
     mentions = []
     if not text:
         return mentions
-    for m in KEYWORD_REGEX.finditer(text):
-        start = max(m.start() - context_chars, 0)
-        end = min(m.end() + context_chars, len(text))
+
+    for match in KEYWORD_REGEX.finditer(text):
+        start = max(match.start() - context_chars, 0)
+        end = min(match.end() + context_chars, len(text))
         snippet = text[start:end].replace("\r", " ").replace("\n", " ")
+
         mentions.append({
-            "keyword": m.group(0),
+            "keyword": match.group(0),
             "snippet": snippet.strip()
         })
+
     return mentions
 
 
-# ---- Date Recognition -----------------------------------------------
+# --------------------------------------------------------------------
+# Meeting date detection
+# --------------------------------------------------------------------
 
 DATE_PATTERNS = [
+    # October 21, 2024
     r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b",
+
+    # 10/21/2024 or 10/21/24
     r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",
+
+    # 2024-10-21
     r"\b\d{4}-\d{2}-\d{2}\b",
+
+    # Oct 21, 2024
     r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+\d{1,2},\s+\d{4}\b",
 ]
 
@@ -77,25 +113,33 @@ DATE_REGEXES = [re.compile(p, re.IGNORECASE) for p in DATE_PATTERNS]
 
 
 def guess_meeting_date(text: str, title: str = "", url: str = "") -> Optional[datetime]:
-    """Best-effort date inference from text/title/url."""
+    """
+    Best-effort extraction of a meeting date from:
+    - document text
+    - title
+    - URL patterns
+
+    Returns datetime or None.
+    """
     candidates = [text or "", title or "", url or ""]
 
-    # Look for explicit dates in text/title/url
-    for src in candidates:
+    # Try explicit date patterns first
+    for source in candidates:
         for rx in DATE_REGEXES:
-            m = rx.search(src)
-            if m:
+            match = rx.search(source)
+            if match:
                 try:
-                    return dateparser.parse(m.group(0), dayfirst=False, fuzzy=True)
+                    return dateparser.parse(match.group(0), dayfirst=False, fuzzy=True)
                 except Exception:
                     continue
 
-    # Fallback: /2023/09/ patterns in URLs
-    m = re.search(r"/(20\d{2})/(\d{1,2})/", url)
-    if m:
+    # URL fallback: /2023/09/ patterns
+    fallback = re.search(r"/(20\d{2})/(\d{1,2})/", url)
+    if fallback:
         try:
-            y, mo = int(m.group(1)), int(m.group(2))
-            return datetime(y, mo, 1)
+            y = int(fallback.group(1))
+            m = int(fallback.group(2))
+            return datetime(y, m, 1)
         except Exception:
             pass
 
