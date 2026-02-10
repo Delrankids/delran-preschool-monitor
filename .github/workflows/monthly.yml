@@ -1,10 +1,8 @@
 name: Delran Preschool Monitor (Monthly)
 
 on:
-  # Scheduled near end-of-month; the step below gates to the actual last day (UTC)
   schedule:
-    - cron: "0 12 28-31 * *"
-  # Manual runs should just run
+    - cron: "0 12 28-31 * *"   # run near end-of-month; step below gates to actual last day (UTC)
   workflow_dispatch:
     inputs:
       force:
@@ -14,7 +12,7 @@ on:
         default: true
 
 permissions:
-  contents: write   # needed to push updated state.json back to the repo
+  contents: write
 
 jobs:
   run:
@@ -24,7 +22,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # ensure git history so we can commit back
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -40,7 +38,7 @@ jobs:
         id: lastday
         shell: bash
         run: |
-          # For manual runs, always true
+          # Manual runs always proceed
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "is_last_day=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -55,16 +53,14 @@ jobs:
             echo "is_last_day=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # 🔒 NEW: Guard against stray Markdown code fences/backticks in Python files
       - name: Guard against stray Markdown backticks
         if: steps.lastday.outputs.is_last_day == 'true'
         shell: bash
         run: |
           set -e
-          # Look only at Python files under scripts/
           if grep -R --include='*.py' -nE '```|^`$' scripts 2>/dev/null; then
             echo "::error ::Found stray Markdown code fences/backticks in scripts/*.py."
-            echo "Please remove any lines containing triple backticks (\`\`\`) or a lone backtick (\`)."
+            echo "Please remove any lines containing triple backticks or a lone backtick."
             exit 1
           fi
 
@@ -121,21 +117,15 @@ jobs:
         if: steps.lastday.outputs.is_last_day == 'true'
         env:
           PYTHONUNBUFFERED: "1"
-
-          # Reporting (defaults applied in the script if not set)
           REPORT_TO:   ${{ secrets.REPORT_TO }}
           REPORT_FROM: ${{ secrets.REPORT_FROM }}
           MAIL_FROM:   ${{ secrets.MAIL_FROM }}
-
-          # SMTP (both names accepted)
           SMTP_HOST:   ${{ secrets.SMTP_HOST }}
           SMTP_PORT:   ${{ secrets.SMTP_PORT }}
           SMTP_USER:     ${{ secrets.SMTP_USER }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASS:     ${{ secrets.SMTP_PASS }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-
-          # Optional knobs preserved
           MAX_BOARDDOCS_FILES: "50"
           MIN_YEAR: "2021"
           DOC_DELAY_SECONDS: "2.0"
@@ -153,12 +143,14 @@ jobs:
           ls -la scripts || true
           echo "==== scripts/scraper.py (first 160 lines) ===="
           nl -ba scripts/scraper.py | sed -n '1,160p' || true
-          echo "==== scripts/email_utils.py (first 120 lines) ===="
-          nl -ba scripts/email_utils.py | sed -n '1,120p' || true
-          echo "==== scripts/parser_utils.py (first 120 lines) ===="
-          nl -ba scripts/parser_utils.py | sed -n '1,120p' || true
+          echo "==== scripts/email_utils.py (first 160 lines) ===="
+          nl -ba scripts/email_utils.py | sed -n '1,160p' || true
+          echo "==== scripts/parser_utils.py (first 160 lines) ===="
+          nl -ba scripts/parser_utils.py | sed -n '1,160p' || true
           echo "==== Files generated after run ===="
           ls -la
+          echo "==== .debug/ (if exists) ===="
+          ls -la .debug || true
 
       - name: Commit updated state.json
         if: always()
@@ -173,7 +165,7 @@ jobs:
             echo "state.json not found; scraper may have failed before creating it."
           fi
 
-      - name: Upload HTML & CSVs (for archive or when email disabled)
+      - name: Upload HTML, CSVs & Debug (for archive or when email disabled)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -182,4 +174,5 @@ jobs:
             last_report.html
             report.csv
             scanned.csv
+            .debug/**
           if-no-files-found: ignore
