@@ -88,21 +88,20 @@ jobs:
           port=int(os.environ.get("SMTP_PORT") or 587)
           user=os.environ.get("SMTP_USER") or os.environ.get("SMTP_USERNAME")
           pwd=os.environ.get("SMTP_PASS") or os.environ.get("SMTP_PASSWORD")
-
           if not all([host,user,pwd]):
               print("Missing SMTP credentials.")
               sys.exit(1)
-
           try:
               if port==465:
-                  with smtplib.SMTP_SSL(host,port,timeout=20) as s: s.login(user,pwd)
+                  with smtplib.SMTP_SSL(host,port,timeout=20) as s:
+                      s.login(user,pwd)
               else:
                   with smtplib.SMTP(host,port,timeout=20) as s:
                       s.starttls(context=ssl.create_default_context())
                       s.login(user,pwd)
               print("SMTP login ok.")
           except Exception as e:
-              print("SMTP login failed:",e)
+              print("SMTP login failed:", e)
               sys.exit(1)
           PY
 
@@ -166,6 +165,7 @@ jobs:
             **/last_report.html
             **/report.csv
             **/scanned.csv
+            **/to_send.eml
             **/sent_report.eml
             **/.debug/**
           if-no-files-found: ignore
