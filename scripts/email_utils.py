@@ -5,21 +5,13 @@ from typing import List, Dict, Optional
 from html import escape as html_escape
 
 
-def send_email(
+def _build_email_message(
     subject: str,
     html_body: str,
     to_addr: str,
     from_addr: str,
-    smtp_host: str,
-    smtp_port: int,
-    smtp_user: str,
-    smtp_password: str,
     reply_to: Optional[str] = None,
-) -> None:
-    """
-    Sends an HTML email using STARTTLS (587) or implicit SSL (465).
-    Supports comma- or semicolon-separated recipients in `to_addr`.
-    """
+) -> EmailMessage:
     # Normalize recipients
     recipients = [x.strip() for x in (to_addr or "").replace(";", ",").split(",") if x.strip()]
     if not recipients:
@@ -37,9 +29,28 @@ def send_email(
     # Provide a plain-text fallback
     msg.set_content("This email requires an HTML-compatible client.")
     msg.add_alternative(html_body or "<html><body><p>(empty)</p></body></html>", subtype="html")
+    return msg
+
+
+def send_email(
+    subject: str,
+    html_body: str,
+    to_addr: str,
+    from_addr: str,
+    smtp_host: str,
+    smtp_port: int,
+    smtp_user: str,
+    smtp_password: str,
+    reply_to: Optional[str] = None,
+) -> bytes:
+    """
+    Sends an HTML email using STARTTLS (587) or implicit SSL (465).
+    Returns the raw .eml bytes of the message that was sent.
+    """
+    msg = _build_email_message(subject, html_body, to_addr, from_addr, reply_to=reply_to)
+    eml_bytes = msg.as_bytes()
 
     context = ssl.create_default_context()
-
     try:
         if int(smtp_port) == 465:
             with smtplib.SMTP_SSL(smtp_host, int(smtp_port), timeout=60, context=context) as server:
@@ -57,18 +68,12 @@ def send_email(
     except Exception as ex:
         raise RuntimeError(f"SMTP send failed: {ex}") from ex
 
+    return eml_bytes
+
 
 def render_html_report(results: List[Dict]) -> str:
     """
     Builds the HTML email body from the scraper results.
-
-    Each result item:
-      {
-        "title": str,
-        "url": str,
-        "date": Optional[str],
-        "mentions": [{"keyword": str, "snippet": str}, ...]
-      }
     """
     if not results:
         body_html = "<p>No preschool-related mentions were found in this period’s BOE minutes.</p>"
@@ -83,7 +88,6 @@ def render_html_report(results: List[Dict]) -> str:
             title_esc = html_escape(title)
             date_html = f"<p><strong>Date:</strong> {html_escape(date_val)}</p>" if date_val else ""
 
-            # Mentions list
             mention_li: List[str] = []
             for m in (r.get("mentions") or []):
                 kw = html_escape(m.get("keyword", ""))
@@ -104,7 +108,6 @@ def render_html_report(results: List[Dict]) -> str:
 
         body_html = "<ol>" + "".join(items) + "</ol>"
 
-    # Wrap in complete HTML (kept compact and simple)
     html = (
         "<!DOCTYPE html>"
         "<html>"
