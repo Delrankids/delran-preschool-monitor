@@ -1,8 +1,10 @@
 name: Delran Preschool Monitor (Monthly)
 
 on:
+  # Scheduled near end-of-month; the step below gates to the actual last day (UTC)
   schedule:
-    - cron: "0 12 28-31 * *"   # run near end-of-month; step below gates to actual last day (UTC)
+    - cron: "0 12 28-31 * *"
+  # Manual runs should just run
   workflow_dispatch:
     inputs:
       force:
@@ -10,9 +12,14 @@ on:
         required: false
         type: boolean
         default: true
+      send_test:
+        description: "Send a one-time test email before running the scraper"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: write   # needed to push updated state.json back to the repo
 
 jobs:
   run:
@@ -22,7 +29,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # ensure git history so we can commit back
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,7 +45,7 @@ jobs:
         id: lastday
         shell: bash
         run: |
-          # Manual runs always proceed
+          # For manual runs, always true
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "is_last_day=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -53,6 +60,7 @@ jobs:
             echo "is_last_day=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Guard against stray Markdown code fences/backticks in Python files
       - name: Guard against stray Markdown backticks
         if: steps.lastday.outputs.is_last_day == 'true'
         shell: bash
@@ -70,10 +78,16 @@ jobs:
         run: |
           set -e
           python - <<'PY'
-          import sys, py_compile, glob
-          files = sorted(glob.glob("scripts/*.py"))
-          print("Checking:", files)
-          for f in files:
+          import sys, py_compile
+          targets = [
+              "scripts/email_utils.py",
+              "scripts/parser_utils.py",
+              "scripts/scraper.py",
+              "scripts/send_email.py",
+              "scripts/preschool_monitor.py",
+          ]
+          print("Checking:", targets)
+          for f in targets:
               py_compile.compile(f, doraise=True)
               print("OK  ", f)
           PY
@@ -113,19 +127,42 @@ jobs:
               sys.exit(1)
           PY
 
+      # 🔔 NEW: optional one-time test email to verify MAIL_FROM / REPORT_TO are accepted by your SMTP
+      - name: Send test email (optional)
+        if: steps.lastday.outputs.is_last_day == 'true' && github.event.inputs.send_test == 'true'
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          # IMPORTANT: send_email.py expects MAIL_FROM and MAIL_TO
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO:   ${{ secrets.REPORT_TO }}
+        shell: bash
+        run: |
+          set -e
+          echo "<html><body><h3>Delran Preschool Monitor – Test</h3><p>This is a test email from GitHub Actions.</p></body></html>" > test.html
+          python scripts/send_email.py --subject "Delran Preschool Monitor – TEST" --html-body test.html
+
       - name: Run scraper
         if: steps.lastday.outputs.is_last_day == 'true'
         env:
           PYTHONUNBUFFERED: "1"
+
+          # Reporting (defaults applied in the script if not set)
           REPORT_TO:   ${{ secrets.REPORT_TO }}
           REPORT_FROM: ${{ secrets.REPORT_FROM }}
           MAIL_FROM:   ${{ secrets.MAIL_FROM }}
+
+          # SMTP (both names accepted)
           SMTP_HOST:   ${{ secrets.SMTP_HOST }}
           SMTP_PORT:   ${{ secrets.SMTP_PORT }}
           SMTP_USER:     ${{ secrets.SMTP_USER }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASS:     ${{ secrets.SMTP_PASS }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+
+          # Optional knobs preserved
           MAX_BOARDDOCS_FILES: "50"
           MIN_YEAR: "2021"
           DOC_DELAY_SECONDS: "2.0"
