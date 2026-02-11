@@ -24,10 +24,15 @@ def send_email(
     if not recipients:
         raise ValueError("send_email: no valid recipient addresses found in to_addr.")
 
+    if not from_addr:
+        raise ValueError("send_email: from_addr is empty; set REPORT_FROM or MAIL_FROM.")
+
     msg = EmailMessage()
-    msg["Subject"] = subject
+    msg["Subject"] = subject or "Delran Preschool Monitor"
     msg["From"] = from_addr
     msg["To"] = ", ".join(recipients)
+    # Optional: if you later want a different reply-to
+    # msg["Reply-To"] = from_addr
 
     # Provide a plain-text fallback
     msg.set_content("This email requires an HTML-compatible client.")
@@ -35,17 +40,22 @@ def send_email(
 
     context = ssl.create_default_context()
 
-    if int(smtp_port) == 465:
-        # Implicit SSL
-        with smtplib.SMTP_SSL(smtp_host, int(smtp_port), timeout=60, context=context) as server:
-            server.login(smtp_user, smtp_password)
-            server.send_message(msg)
-    else:
-        # STARTTLS
-        with smtplib.SMTP(smtp_host, int(smtp_port), timeout=60) as server:
-            server.starttls(context=context)
-            server.login(smtp_user, smtp_password)
-            server.send_message(msg)
+    try:
+        if int(smtp_port) == 465:
+            with smtplib.SMTP_SSL(smtp_host, int(smtp_port), timeout=60, context=context) as server:
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_host, int(smtp_port), timeout=60) as server:
+                server.starttls(context=context)
+                server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+    except smtplib.SMTPResponseException as ex:
+        code = getattr(ex, "smtp_code", None)
+        err  = getattr(ex, "smtp_error", b"").decode("utf-8", "ignore")
+        raise RuntimeError(f"SMTPResponseException {code}: {err}") from ex
+    except Exception as ex:
+        raise RuntimeError(f"SMTP send failed: {ex}") from ex
 
 
 def render_html_report(results: List[Dict]) -> str:
@@ -81,7 +91,6 @@ def render_html_report(results: List[Dict]) -> str:
                 mention_li.append(f"<li><strong>{kw}</strong>: {snip}</li>")
             mentions_html = "<ul>" + "".join(mention_li) + "</ul>" if mention_li else ""
 
-            # One result item
             items.append(
                 "<li style=\"margin-bottom: 20px;\">"
                 f"<p><strong>Title:</strong> {title_esc}</p>"
