@@ -62,7 +62,7 @@ jobs:
 
       # Guard against stray Markdown code fences/backticks in Python files
       - name: Guard against stray Markdown backticks
-        if: steps.lastday.outputs.is_last_day == 'true'
+        if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
         shell: bash
         run: |
           set -e
@@ -73,7 +73,7 @@ jobs:
           fi
 
       - name: Python syntax check (py_compile)
-        if: steps.lastday.outputs.is_last_day == 'true'
+        if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
         shell: bash
         run: |
           set -e
@@ -93,7 +93,7 @@ jobs:
           PY
 
       - name: Test SMTP connectivity (quick)
-        if: steps.lastday.outputs.is_last_day == 'true'
+        if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -129,7 +129,7 @@ jobs:
 
       # Optional one-time TEST email (uses MAIL_FROM and REPORT_TO)
       - name: Send test email (optional)
-        if: steps.lastday.outputs.is_last_day == 'true' && github.event.inputs.send_test == 'true'
+        if: ${{ steps.lastday.outputs.is_last_day == 'true' && github.event.inputs.send_test == 'true' }}
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -144,7 +144,7 @@ jobs:
           python scripts/send_email.py --subject "Delran Preschool Monitor – TEST" --html-body test.html
 
       - name: Run scraper
-        if: steps.lastday.outputs.is_last_day == 'true'
+        if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
         env:
           PYTHONUNBUFFERED: "1"
 
