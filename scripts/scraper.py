@@ -1,137 +1,65 @@
-# Delran BOE Preschool Monitor – Scraper (Enhanced + Diagnostics, safe paste)
+# Email
+    to_addr = os.environ.get("REPORT_TO") or "robwaz@delrankids.net"
 
-import os
-import csv
-import json
-import time
-import hashlib
-import logging
-from typing import List, Dict, Optional, Tuple
-from urllib.parse import urljoin, urlparse
-from datetime import datetime, timedelta
+    # Always send *from the authenticated mailbox* (safest for O365/Exchange).
+    # If you want replies to go elsewhere, set REPORT_FROM and we'll put it in Reply-To.
+    smtp_host = os.environ.get("SMTP_HOST")
+    smtp_port = int(os.environ.get("SMTP_PORT") or "587")
+    smtp_user = os.environ.get("SMTP_USER") or os.environ.get("SMTP_USERNAME")
+    smtp_password = os.environ.get("SMTP_PASS") or os.environ.get("SMTP_PASSWORD")
 
-import requests
-from bs4 import BeautifulSoup
-from dateutil import parser as dateparser
+    # Force From to smtp_user; set Reply-To to REPORT_FROM (or MAIL_FROM) if present.
+    forced_from = smtp_user or ""
+    reply_to = os.environ.get("REPORT_FROM") or os.environ.get("MAIL_FROM") or None
 
-# --------------------------- Configuration ---------------------------
+    # Masked logging to verify values without exposing secrets
+    def _mask(s: str) -> str:
+        if not s:
+            return ""
+        if "@" in s:
+            name, _, domain = s.partition("@")
+            return (name[:1] + "***@" + domain) if domain else "***"
+        return s[:2] + "***"
 
-BASE_URL = os.environ.get("DELRAN_MINUTES_URL", "https://www.delranschools.org/b_o_e/meeting_minutes")
-BOE_URL = os.environ.get("DELRAN_BOE_URL", "https://www.delranschools.org/b_o_e")
-BOARDDOCS_PUBLIC = os.environ.get("BOARDDOCS_PUBLIC_URL", "https://go.boarddocs.com/nj/delranschools/Board.nsf/Public")
+    print(
+        "Email config:",
+        "to=", _mask(to_addr),
+        "from=", _mask(forced_from),
+        "reply_to=", _mask(reply_to or ""),
+        "smtp=", (smtp_host or ""),
+        "port=", smtp_port,
+        "user=", _mask(smtp_user),
+    )
 
-STATE_FILE = os.environ.get("STATE_FILE", "state.json")
-DEBUG_SAVE_HTML = os.environ.get("DEBUG_SAVE_HTML", "0") == "1"
+    can_send = all([to_addr, forced_from, smtp_host, smtp_port, smtp_user, smtp_password])
+    if not can_send:
+        raise RuntimeError(
+            "Email not sent: missing one of To/From/SMTP settings. "
+            "Ensure REPORT_TO and SMTP_* secrets are set. From is forced to SMTP user."
+        )
 
-HEADERS = {
-    "User-Agent": "Delran-Preschool-Agent/1.3 (+mailto:alerts@example.com; GitHub Actions bot)",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-}
+    subject = (
+        "Delran BOE – Preschool Mentions (Backfill " + str(datetime(2021,1,1).date())
+        + " → " + str(end.date()) + ")"
+        if is_backfill else
+        "Delran BOE – Preschool Mentions (" + start.date().isoformat()[:7] + ") Monthly Report"
+    )
 
-DOC_DELAY_SECONDS = float(os.environ.get("DOC_DELAY_SECONDS", "2.0"))
-REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT", "60"))
-MAX_BOARDDOCS_FILES = int(os.environ.get("MAX_BOARDDOCS_FILES", "50"))
+    send_email(
+        subject=subject,
+        html_body=html_report_full,
+        to_addr=to_addr,
+        from_addr=forced_from,   # ← send AS the authenticated account
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        smtp_user=smtp_user,
+        smtp_password=smtp_password,
+        reply_to=reply_to,       # ← optional Reply‑To (your preferred address)
+    )
 
-_MIN_YEAR_ENV = os.environ.get("MIN_YEAR")
-MIN_YEAR = int(_MIN_YEAR_ENV) if (_MIN_YEAR_ENV and str(_MIN_YEAR_ENV).isdigit()) else None
-
-IGNORE_DEDUPE = os.environ.get("IGNORE_DEDUPE", "0") == "1"
-
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-
-# ----------------------------- State --------------------------------
-
-def load_state() -> Dict:
-    state = {"seen_hashes": [], "backfill_done": False, "last_run_end": None}
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                state.update(data)
-        except Exception:
-            logging.warning("State file unreadable; starting fresh.")
-    return state
-
-
-def save_state(state: Dict) -> None:
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
-
-
-def sha1_of(*parts: str) -> str:
-    h = hashlib.sha1()
-    for p in parts:
-        h.update((p or "").encode("utf-8", "ignore"))
-    return h.hexdigest()
-
-
-def html_escape(s: str) -> str:
-    s2 = s or ""
-    s2 = s2.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-    return s2
-
-
-def ensure_debug_dir() -> None:
-    os.makedirs(".debug", exist_ok=True)
-
-
-# ------------------------------ HTTP --------------------------------
-
-def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
-    headers = dict(HEADERS)
-    if referer:
-        headers["Referer"] = referer
-    logging.info("GET %s", url)
-    resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-    logging.info(" -> status=%s, bytes=%s", resp.status_code, len(resp.content))
-    resp.raise_for_status()
-    return resp
-
-
-def polite_delay() -> None:
-    if DOC_DELAY_SECONDS > 0:
-        time.sleep(DOC_DELAY_SECONDS)
-
-
-# ---------------------------- Discovery -----------------------------
-
-DOC_EXTS = (".pdf", ".docx", ".doc", ".htm", ".html")
-
-
-def _collect_from_page(page_url: str, debug_name: Optional[str]) -> List[Dict[str, str]]:
-    items: List[Dict[str, str]] = []
-    try:
-        resp = fetch(page_url)
-    except Exception as e:
-        logging.warning("Failed to fetch %s: %s", page_url, str(e))
-        return items
-
-    if DEBUG_SAVE_HTML or debug_name:
-        try:
-            ensure_debug_dir()
-            name = debug_name or "page.html"
-            with open(os.path.join(".debug", name), "wb") as f:
-                f.write(resp.content)
-            logging.info("Saved debug HTML -> .debug/%s", name)
-        except Exception as e:
-            logging.warning("Could not write debug HTML for %s: %s", page_url, str(e))
-
-    soup = BeautifulSoup(resp.text, "lxml")
-    seen = set()
-
-    for a in soup.find_all("a", href=True):
-        href = a["href"] or ""
-        full = urljoin(page_url, href)
-        title = a.get_text(strip=True) or full
-        if ("DisplayFile.aspx" in full) or full.lower().endswith(DOC_EXTS):
-            if full not in seen:
-                seen.add(full)
-                items.append({"title": title, "url": full, "source": "district"})
-    return items
-
-
+    print(
+        "Email sent to " + to_addr
+        + ". Matches: " + str(sum(len(r["mentions"]) for r in results_for_email))
+        + "; items: " + str(len(results_for_email))
+        + "; scanned_total: " + str(len(scanned_log))
+    )
