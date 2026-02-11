@@ -1,138 +1,168 @@
-import smtplib
-import ssl
-from email.message import EmailMessage
-from typing import List, Dict, Optional
-from html import escape as html_escape
+# Delran BOE Preschool Monitor – Scraper (Enhanced + Diagnostics, safe paste)
+
+import os
+import csv
+import json
+import time
+import hashlib
+import logging
+from typing import List, Dict, Optional, Tuple
+from urllib.parse import urljoin, urlparse
+from datetime import datetime, timedelta
+
+import requests
+from bs4 import BeautifulSoup
+from dateutil import parser as dateparser
+
+# --------------------------- Configuration ---------------------------
+
+BASE_URL = os.environ.get("DELRAN_MINUTES_URL", "https://www.delranschools.org/b_o_e/meeting_minutes")
+BOE_URL = os.environ.get("DELRAN_BOE_URL", "https://www.delranschools.org/b_o_e")
+BOARDDOCS_PUBLIC = os.environ.get("BOARDDOCS_PUBLIC_URL", "https://go.boarddocs.com/nj/delranschools/Board.nsf/Public")
+
+STATE_FILE = os.environ.get("STATE_FILE", "state.json")
+DEBUG_SAVE_HTML = os.environ.get("DEBUG_SAVE_HTML", "0") == "1"
+
+HEADERS = {
+    "User-Agent": "Delran-Preschool-Agent/1.3 (+mailto:alerts@example.com; GitHub Actions bot)",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+}
+
+DOC_DELAY_SECONDS = float(os.environ.get("DOC_DELAY_SECONDS", "2.0"))
+REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT", "60"))
+MAX_BOARDDOCS_FILES = int(os.environ.get("MAX_BOARDDOCS_FILES", "50"))
+
+_MIN_YEAR_ENV = os.environ.get("MIN_YEAR")
+MIN_YEAR = int(_MIN_YEAR_ENV) if (_MIN_YEAR_ENV and str(_MIN_YEAR_ENV).isdigit()) else None
+
+IGNORE_DEDUPE = os.environ.get("IGNORE_DEDUPE", "0") == "1"
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
-def _build_email_message(
-    subject: str,
-    html_body: str,
-    to_addr: str,
-    from_addr: str,
-    reply_to: Optional[str] = None,
-) -> EmailMessage:
-    # Normalize recipients
-    recipients = [x.strip() for x in (to_addr or "").replace(";", ",").split(",") if x.strip()]
-    if not recipients:
-        raise ValueError("send_email: no valid recipient addresses found in to_addr.")
-    if not from_addr:
-        raise ValueError("send_email: from_addr is empty.")
+# ----------------------------- State --------------------------------
 
-    msg = EmailMessage()
-    msg["Subject"] = subject or "Delran Preschool Monitor"
-    msg["From"] = from_addr
-    msg["To"] = ", ".join(recipients)
-    if reply_to and reply_to.strip():
-        msg["Reply-To"] = reply_to.strip()
-
-    # Provide a plain-text fallback
-    msg.set_content("This email requires an HTML-compatible client.")
-    msg.add_alternative(html_body or "<html><body><p>(empty)</p></body></html>", subtype="html")
-    return msg
+def load_state() -> Dict:
+    state = {"seen_hashes": [], "backfill_done": False, "last_run_end": None}
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                state.update(data)
+        except Exception:
+            logging.warning("State file unreadable; starting fresh.")
+    return state
 
 
-def send_email(
-    subject: str,
-    html_body: str,
-    to_addr: str,
-    from_addr: str,
-    smtp_host: str,
-    smtp_port: int,
-    smtp_user: str,
-    smtp_password: str,
-    reply_to: Optional[str] = None,
-) -> bytes:
-    """
-    Sends an HTML email using STARTTLS (587) or implicit SSL (465).
-    Returns the raw .eml bytes of the message that was sent.
-    """
-    msg = _build_email_message(subject, html_body, to_addr, from_addr, reply_to=reply_to)
-    eml_bytes = msg.as_bytes()
+def save_state(state: Dict) -> None:
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
 
-    context = ssl.create_default_context()
+
+def sha1_of(*parts: str) -> str:
+    h = hashlib.sha1()
+    for p in parts:
+        h.update((p or "").encode("utf-8", "ignore"))
+    return h.hexdigest()
+
+
+def html_escape(s: str) -> str:
+    s2 = s or ""
+    s2 = s2.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    return s2
+
+
+def ensure_debug_dir() -> None:
+    os.makedirs(".debug", exist_ok=True)
+
+
+# ------------------------------ HTTP --------------------------------
+
+def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
+    headers = dict(HEADERS)
+    if referer:
+        headers["Referer"] = referer
+    logging.info("GET %s", url)
+    resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+    logging.info(" -> status=%s, bytes=%s", resp.status_code, len(resp.content))
+    resp.raise_for_status()
+    return resp
+
+
+def polite_delay() -> None:
+    if DOC_DELAY_SECONDS > 0:
+        time.sleep(DOC_DELAY_SECONDS)
+
+
+# ---------------------------- Discovery -----------------------------
+
+DOC_EXTS = (".pdf", ".docx", ".doc", ".htm", ".html")
+
+
+def _collect_from_page(page_url: str, debug_name: Optional[str]) -> List[Dict[str, str]]:
+    items: List[Dict[str, str]] = []
     try:
-        if int(smtp_port) == 465:
-            with smtplib.SMTP_SSL(smtp_host, int(smtp_port), timeout=60, context=context) as server:
-                server.login(smtp_user, smtp_password)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(smtp_host, int(smtp_port), timeout=60) as server:
-                server.starttls(context=context)
-                server.login(smtp_user, smtp_password)
-                server.send_message(msg)
-    except smtplib.SMTPResponseException as ex:
-        code = getattr(ex, "smtp_code", None)
-        err  = getattr(ex, "smtp_error", b"").decode("utf-8", "ignore")
-        raise RuntimeError(f"SMTPResponseException {code}: {err}") from ex
-    except Exception as ex:
-        raise RuntimeError(f"SMTP send failed: {ex}") from ex
+        resp = fetch(page_url)
+    except Exception as e:
+        logging.warning("Failed to fetch %s: %s", page_url, str(e))
+        return items
 
-    return eml_bytes
+    if DEBUG_SAVE_HTML or debug_name:
+        try:
+            ensure_debug_dir()
+            name = debug_name or "page.html"
+            with open(os.path.join(".debug", name), "wb") as f:
+                f.write(resp.content)
+            logging.info("Saved debug HTML -> .debug/%s", name)
+        except Exception as e:
+            logging.warning("Could not write debug HTML for %s: %s", page_url, str(e))
+
+    soup = BeautifulSoup(resp.text, "lxml")
+    seen = set()
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"] or ""
+        full = urljoin(page_url, href)
+        title = a.get_text(strip=True) or full
+        if ("DisplayFile.aspx" in full) or full.lower().endswith(DOC_EXTS):
+            if full not in seen:
+                seen.add(full)
+                items.append({"title": title, "url": full, "source": "district"})
+    return items
 
 
-def render_html_report(results: List[Dict]) -> str:
-    """
-    Builds the HTML email body from the scraper results.
+def get_minutes_links() -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    out.extend(_collect_from_page(BASE_URL, "minutes.html"))
+    out.extend(_collect_from_page(BOE_URL, "boe.html"))
+    logging.info("District links collected: %d", len(out))
+    return out
 
-    Each result item:
-      {
-        "title": str,
-        "url": str,
-        "date": Optional[str],
-        "mentions": [{"keyword": str, "snippet": str}, ...]
-      }
-    """
-    if not results:
-        body_html = "<p>No preschool-related mentions were found in this period’s BOE minutes.</p>"
-    else:
-        items: List[str] = []
-        for r in results:
-            url = r.get("url") or ""
-            title = r.get("title") or "Meeting Item"
-            date_val = r.get("date") or ""
 
-            url_esc = html_escape(url)
-            title_esc = html_escape(title)
-            date_html = f"<p><strong>Date:</strong> {html_escape(date_val)}</p>" if date_val else ""
-
-            # Mentions list
-            mention_li: List[str] = []
-            for m in (r.get("mentions") or []):
-                kw = html_escape(m.get("keyword", ""))
-                snip = html_escape(m.get("snippet", ""))
-                mention_li.append(f"<li><strong>{kw}</strong>: {snip}</li>")
-            mentions_html = "<ul>" + "".join(mention_li) + "</ul>" if mention_li else ""
-
-            items.append(
-                "<li style=\"margin-bottom: 20px;\">"
-                f"<p><strong>Title:</strong> {title_esc}</p>"
-                f"{date_html}"
-                "<p><strong>URL:</strong> "
-                f"<a href=\"{url_esc}\" target=\"_blank\" rel=\"noopener noreferrer\">{url_esc}</a>"
-                "</p>"
-                f"{mentions_html}"
-                "</li>"
-            )
-
-        body_html = "<ol>" + "".join(items) + "</ol>"
-
-    # Wrap in complete HTML (kept compact and simple)
-    html = (
-        "<!DOCTYPE html>"
-        "<html>"
-        "<head>"
-        "<meta charset=\"utf-8\" />"
-        "<title>Delran BOE – Preschool Mentions</title>"
-        "</head>"
-        "<body style=\"font-family: Arial, sans-serif; line-height: 1.6; color: #222;\">"
-        "<h2>Delran BOE – Preschool Mentions (Monthly Report)</h2>"
-        f"{body_html}"
-        "<hr>"
-        "<p style=\"color: #888; font-size: 12px;\">"
-        "This report was generated automatically by your Delran Preschool Monitor."
-        "</p>"
-        "</body>"
-        "</html>"
-    )
-    return html
+def get_boarddocs_links(max_files: int) -> List[Dict[str, str]]:
+    candidates: List[Dict[str, str]] = []
+    to_visit = [BOARDDOCS_PUBLIC]
+    visited = set()
+    while to_visit and len(to_visit) <= 8 and len(candidates) < max_files:
+        url = to_visit.pop(0)
+        if url in visited:
+            continue
+        visited.add(url)
+        try:
+            resp = fetch(url)
+        except Exception as e:
+            logging.warning("BoardDocs fetch failed %s: %s", url, str(e))
+            continue
+        soup = BeautifulSoup(resp.text, "lxml")
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            full = urljoin(url, href)
+            text = a.get_text(strip=True) or "BoardDocs File"
+            if "/files/" in href and href.lower().endswith(".pdf"):
+                candidates.append({"title": text, "url": full, "source": "boarddocs"})
+                if len(candidates) >= max_files:
+                    break
