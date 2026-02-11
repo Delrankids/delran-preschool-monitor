@@ -1,7 +1,7 @@
 import smtplib
 import ssl
 from email.message import EmailMessage
-from typing import List, Dict
+from typing import List, Dict, Optional
 from html import escape as html_escape
 
 
@@ -13,7 +13,8 @@ def send_email(
     smtp_host: str,
     smtp_port: int,
     smtp_user: str,
-    smtp_password: str
+    smtp_password: str,
+    reply_to: Optional[str] = None,
 ) -> None:
     """
     Sends an HTML email using STARTTLS (587) or implicit SSL (465).
@@ -23,16 +24,15 @@ def send_email(
     recipients = [x.strip() for x in (to_addr or "").replace(";", ",").split(",") if x.strip()]
     if not recipients:
         raise ValueError("send_email: no valid recipient addresses found in to_addr.")
-
     if not from_addr:
-        raise ValueError("send_email: from_addr is empty; set REPORT_FROM or MAIL_FROM.")
+        raise ValueError("send_email: from_addr is empty.")
 
     msg = EmailMessage()
     msg["Subject"] = subject or "Delran Preschool Monitor"
     msg["From"] = from_addr
     msg["To"] = ", ".join(recipients)
-    # Optional: if you later want a different reply-to
-    # msg["Reply-To"] = from_addr
+    if reply_to and reply_to.strip():
+        msg["Reply-To"] = reply_to.strip()
 
     # Provide a plain-text fallback
     msg.set_content("This email requires an HTML-compatible client.")
@@ -62,7 +62,7 @@ def render_html_report(results: List[Dict]) -> str:
     """
     Builds the HTML email body from the scraper results.
 
-    Each result item should look like:
+    Each result item:
       {
         "title": str,
         "url": str,
