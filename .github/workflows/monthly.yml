@@ -1,8 +1,193 @@
-- name: Upload HTML, CSVs & Debug (for archive or when email disabled)
+name: Delran Preschool Monitor (Monthly)
+
+on:
+  # Scheduled near end-of-month; the step below gates to the actual last day (UTC)
+  schedule:
+    - cron: "0 12 28-31 * *"
+  # Manual runs should just run
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run immediately (legacy switch; manual runs already run)"
+        required: false
+        type: boolean
+        default: true
+      send_test:
+        description: "Send a one-time test email before running the scraper"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # needed to push updated state.json back to the repo
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      - name: Determine if last day-of-month
+        id: lastday
+        shell: bash
+        run: |
+          # For manual runs, always true
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "is_last_day=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TODAY_UTC=$(date -u +%Y-%m-%d)
+          TOMORROW_UTC=$(date -u -d "$TODAY_UTC + 1 day" +%Y-%m-%d)
+          M1=$(date -u -d "$TODAY_UTC" +%m)
+          M2=$(date -u -d "$TOMORROW_UTC" +%m)
+          if [ "$M1" != "$M2" ]; then
+            echo "is_last_day=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_last_day=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Guard against stray Markdown code fences/backticks in Python files
+      - name: Guard against stray Markdown backticks
+        if: steps.lastday.outputs.is_last_day == 'true'
+        shell: bash
+        run: |
+          set -e
+          if grep -R --include='*.py' -nE '```|^`$' scripts 2>/dev/null; then
+            echo "::error ::Found stray Markdown code fences/backticks in scripts/*.py."
+            echo "Please remove any lines containing triple backticks or a lone backtick."
+            exit 1
+          fi
+
+      - name: Python syntax check (py_compile)
+        if: steps.lastday.outputs.is_last_day == 'true'
+        shell: bash
+        run: |
+          set -e
+          python - <<'PY'
+          import sys, py_compile
+          targets = [
+              "scripts/email_utils.py",
+              "scripts/parser_utils.py",
+              "scripts/scraper.py",
+              "scripts/send_email.py",
+              "scripts/preschool_monitor.py",
+          ]
+          print("Checking:", targets)
+          for f in targets:
+              py_compile.compile(f, doraise=True)
+              print("OK  ", f)
+          PY
+
+      - name: Test SMTP connectivity (quick)
+        if: steps.lastday.outputs.is_last_day == 'true'
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, smtplib, ssl, sys
+          host = os.environ.get("SMTP_HOST")
+          port = int(os.environ.get("SMTP_PORT") or "587")
+          user = os.environ.get("SMTP_USER") or os.environ.get("SMTP_USERNAME")
+          pwd  = os.environ.get("SMTP_PASS") or os.environ.get("SMTP_PASSWORD")
+          if not all([host, port, user, pwd]):
+              print("SMTP test: missing one or more SMTP_* secrets.")
+              print("Host:", bool(host), "Port:", port, "User:", bool(user), "Pass:", bool(pwd))
+              sys.exit(1)
+          try:
+              if port == 465:
+                  with smtplib.SMTP_SSL(host, port, timeout=30) as s:
+                      s.login(user, pwd)
+              else:
+                  with smtplib.SMTP(host, port, timeout=30) as s:
+                      s.starttls(context=ssl.create_default_context())
+                      s.login(user, pwd)
+              print("SMTP connectivity OK.")
+          except Exception as e:
+              print("SMTP connectivity FAILED:", e)
+              sys.exit(1)
+          PY
+
+      # Optional one-time TEST email (uses MAIL_FROM and REPORT_TO)
+      - name: Send test email (optional)
+        if: steps.lastday.outputs.is_last_day == 'true' && github.event.inputs.send_test == 'true'
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO:   ${{ secrets.REPORT_TO }}
+        shell: bash
+        run: |
+          set -e
+          echo "<html><body><h3>Delran Preschool Monitor – Test</h3><p>This is a test email from GitHub Actions.</p></body></html>" > test.html
+          python scripts/send_email.py --subject "Delran Preschool Monitor – TEST" --html-body test.html
+
+      - name: Run scraper
+        if: steps.lastday.outputs.is_last_day == 'true'
+        env:
+          PYTHONUNBUFFERED: "1"
+
+          # Reporting (defaults in code if not set)
+          REPORT_TO:   ${{ secrets.REPORT_TO }}
+          REPORT_FROM: ${{ secrets.REPORT_FROM }}
+          MAIL_FROM:   ${{ secrets.MAIL_FROM }}
+
+          # SMTP (both names accepted)
+          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:     ${{ secrets.SMTP_USER }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASS:     ${{ secrets.SMTP_PASS }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+
+          # Optional knobs preserved
+          MAX_BOARDDOCS_FILES: "50"
+          MIN_YEAR: "2021"
+          DOC_DELAY_SECONDS: "2.0"
+          REQUEST_TIMEOUT: "60"
+        run: |
+          python -u scripts/scraper.py
+
+      - name: Commit updated state.json
+        if: always()
+        run: |
+          if [ -f state.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add state.json
+            git commit -m "chore: update state.json [skip ci]" || echo "No changes to commit."
+            git push || true
+          else
+            echo "state.json not found; scraper may have failed before creating it."
+          fi
+
+      - name: Upload HTML, CSVs & Debug (for archive or when email disabled)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: last_report
+          # IMPORTANT: keep '|' and each path on its own line
           path: |
             last_report.html
             report.csv
@@ -10,3 +195,4 @@
             sent_report.eml
             .debug/**
           if-no-files-found: ignore
+          retention-days: 7
