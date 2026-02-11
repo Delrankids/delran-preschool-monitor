@@ -11,7 +11,8 @@ What it does
 6) First run does a backfill from 2021-01-01 to today; then runs monthly.
 7) Writes a full audit log of *every* document seen to scanned.csv and
    appends a "Documents scanned" section to the email.
-8) If discovery returns 0 links, saves Minutes/BOE HTML and items.json to .debug/.
+8) If discovery returns 0 links, saves the raw Minutes/BOE HTML and items.json
+   under .debug/ to quickly diagnose site/layout changes.
 
 Environment (set in workflow or repo secrets)
 ---------------------------------------------
@@ -21,15 +22,17 @@ Environment (set in workflow or repo secrets)
 
 - REPORT_TO                -> recipient (default: robwaz@delrankids.net)
 - REPORT_FROM or MAIL_FROM -> sender (one required for sending)
-- SMTP_HOST, SMTP_PORT     -> 587 (STARTTLS) or 465 (SSL)
-- SMTP_USER/SMTP_USERNAME, SMTP_PASS/SMTP_PASSWORD
+- SMTP_HOST
+- SMTP_PORT                -> 587 (STARTTLS) or 465 (SSL)
+- SMTP_USER or SMTP_USERNAME
+- SMTP_PASS or SMTP_PASSWORD
 
 - STATE_FILE            -> default: state.json
-- DOC_DELAY_SECONDS     -> default: 2.0
-- REQUEST_TIMEOUT       -> default: 60
+- DOC_DELAY_SECONDS     -> polite delay between requests (default: 2.0)
+- REQUEST_TIMEOUT       -> requests timeout seconds (default: 60)
 - MAX_BOARDDOCS_FILES   -> default: 50
-- MIN_YEAR              -> optional int
-- IGNORE_DEDUPE         -> "1" to ignore dedupe for this run
+- MIN_YEAR              -> optional int to drop items with parsed date before year
+- IGNORE_DEDUPE         -> "1" to ignore dedupe for this run (default: "0")
 - DEBUG_SAVE_HTML       -> "1" to always save fetched HTML to .debug/
 
 Outputs
@@ -47,7 +50,7 @@ import json
 import time
 import hashlib
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 from datetime import datetime, timedelta
 
@@ -125,10 +128,13 @@ def sha1_of(*parts: str) -> str:
 
 
 def html_escape(s: str) -> str:
-    s = s or ""
-    s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    s = s.replace('"', "&quot;")
-    return s
+    return (
+        (s or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
 
 
 def ensure_debug_dir() -> None:
@@ -220,3 +226,100 @@ def get_boarddocs_links(max_files: int) -> List[Dict[str, str]]:
         try:
             resp = fetch(url)
         except Exception as e:
+            logging.warning("BoardDocs fetch failed %s: %s", url, e)
+            continue
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            full = urljoin(url, href)
+            text = a.get_text(strip=True) or "BoardDocs File"
+
+            if "/files/" in href and href.lower().endswith(".pdf"):
+                candidates.append({"title": text, "url": full, "source": "boarddocs"})
+                if len(candidates) >= max_files:
+                    break
+
+            if (
+                "Board.nsf" in full
+                and full.startswith("https://go.boarddocs.com")
+                and full not in visited
+                and len(to_visit) < 8
+            ):
+                to_visit.append(full)
+
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for it in candidates:
+        if it["url"] in seen:
+            continue
+        seen.add(it["url"])
+        out.append(it)
+
+    logging.info("BoardDocs links collected: %d", len(out))
+    return out
+
+
+# -----------------------------------------------------------------------------
+# Extraction
+# -----------------------------------------------------------------------------
+
+def extract_text_for_url(item: Dict[str, str]) -> str:
+    """Follow embedded doc links (if HTML); extract text for PDF/DOCX; else visible text."""
+    from parser_utils import extract_text_from_pdf, extract_text_from_docx  # local import
+
+    url_lower = item["url"].lower()
+    path_guess = urlparse(url_lower).path.lower()
+
+    try:
+        resp = fetch(item["url"])
+    except Exception as e:
+        logging.warning("Fetch failed %s: %s", item["url"], e)
+        return ""
+
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+
+    # If HTML, try to follow to a direct PDF/DOCX first
+    if "text/html" in ctype or path_guess.endswith((".htm", ".html")):
+        soup = BeautifulSoup(resp.text, "lxml")
+        for a in soup.find_all("a", href=True):
+            h = a["href"] or ""
+            if h.lower().endswith(".pdf") or "DisplayFile.aspx" in h or "/files/" in h:
+                inner_url = urljoin(item["url"], h)
+                polite_delay()
+                try:
+                    inner = fetch(inner_url, referer=item["url"])
+                except Exception:
+                    # Can't follow inner link; fall back to visible text below
+                    break
+                inner_ctype = (inner.headers.get("Content-Type") or "").lower()
+                if "application/pdf" in inner_ctype or inner_url.lower().endswith(".pdf"):
+                    polite_delay()
+                    return extract_text_from_pdf(inner.content)
+                if inner_url.lower().endswith(".docx"):
+                    polite_delay()
+                    return extract_text_from_docx(inner.content)
+        # fallback to visible HTML text
+        return " ".join(s.strip() for s in soup.stripped_strings)
+
+    # Direct types
+    if "application/pdf" in ctype or path_guess.endswith(".pdf"):
+        polite_delay()
+        return extract_text_from_pdf(resp.content)
+
+    if path_guess.endswith(".docx"):
+        polite_delay()
+        return extract_text_from_docx(resp.content)
+
+    # Unknown
+    return ""
+
+
+# -----------------------------------------------------------------------------
+# Date range calculation
+# -----------------------------------------------------------------------------
+
+def first_day_of_month(dt: datetime) -> datetime:
+    return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
