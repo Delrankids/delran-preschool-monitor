@@ -78,14 +78,8 @@ jobs:
         run: |
           set -e
           python - <<'PY'
-          import sys, py_compile
-          targets = [
-              "scripts/email_utils.py",
-              "scripts/parser_utils.py",
-              "scripts/scraper.py",
-              "scripts/send_email.py",
-              "scripts/preschool_monitor.py",
-          ]
+          import sys, py_compile, glob
+          targets = sorted(glob.glob("scripts/*.py"))
           print("Checking:", targets)
           for f in targets:
               py_compile.compile(f, doraise=True)
@@ -134,65 +128,3 @@ jobs:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
-          MAIL_TO:   ${{ secrets.REPORT_TO }}
-        shell: bash
-        run: |
-          set -e
-          echo "<html><body><h3>Delran Preschool Monitor – Test</h3><p>This is a test email from GitHub Actions.</p></body></html>" > test.html
-          python scripts/send_email.py --subject "Delran Preschool Monitor – TEST" --html-body test.html
-
-      - name: Run scraper
-        if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
-        env:
-          PYTHONUNBUFFERED: "1"
-
-          # Reporting (defaults in code if not set)
-          REPORT_TO:   ${{ secrets.REPORT_TO }}
-          REPORT_FROM: ${{ secrets.REPORT_FROM }}
-          MAIL_FROM:   ${{ secrets.MAIL_FROM }}
-
-          # SMTP (both names accepted)
-          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
-          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
-          SMTP_USER:     ${{ secrets.SMTP_USER }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASS:     ${{ secrets.SMTP_PASS }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-
-          # Optional knobs preserved
-          MAX_BOARDDOCS_FILES: "50"
-          MIN_YEAR: "2021"
-          DOC_DELAY_SECONDS: "2.0"
-          REQUEST_TIMEOUT: "60"
-        run: |
-          python -u scripts/scraper.py
-
-      - name: Commit updated state.json
-        if: always()
-        run: |
-          if [ -f state.json ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add state.json
-            git commit -m "chore: update state.json [skip ci]" || echo "No changes to commit."
-            git push || true
-          else
-            echo "state.json not found; scraper may have failed before creating it."
-          fi
-
-      - name: Upload HTML, CSVs & Debug (for archive or when email disabled)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: last_report
-          # IMPORTANT: keep '|' and each path on its own line
-          path: |
-            last_report.html
-            report.csv
-            scanned.csv
-            sent_report.eml
-            .debug/**
-          if-no-files-found: ignore
-          retention-days: 7
