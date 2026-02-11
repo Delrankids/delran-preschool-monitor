@@ -1,0 +1,129 @@
+name: Delran Preschool Monitor (Ad-hoc Debug)
+
+on:
+  workflow_dispatch:
+    inputs:
+      send_test:
+        description: "Send a one-time test email first"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      - name: Python syntax check
+        run: |
+          python - <<'PY'
+          import py_compile, glob
+          for f in glob.glob("scripts/*.py"):
+              py_compile.compile(f, doraise=True)
+              print("OK", f)
+          PY
+
+      - name: SMTP quick test
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os, smtplib, ssl, sys
+          host=os.environ.get("SMTP_HOST")
+          port=int(os.environ.get("SMTP_PORT") or 587)
+          user=os.environ.get("SMTP_USER") or os.environ.get("SMTP_USERNAME")
+          pwd=os.environ.get("SMTP_PASS") or os.environ.get("SMTP_PASSWORD")
+          if not all([host,user,pwd]):
+              print("Missing SMTP credentials.")
+              sys.exit(1)
+          try:
+              if port==465:
+                  with smtplib.SMTP_SSL(host,port,timeout=20) as s:
+                      s.login(user,pwd)
+              else:
+                  with smtplib.SMTP(host,port,timeout=20) as s:
+                      s.starttls(context=ssl.create_default_context())
+                      s.login(user,pwd)
+              print("SMTP login ok.")
+          except Exception as e:
+              print("SMTP login failed:", e)
+              sys.exit(1)
+          PY
+
+      - name: Send test email (optional)
+        if: ${{ github.event.inputs.send_test == 'true' }}
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO:   ${{ secrets.REPORT_TO }}
+        run: |
+          echo "<html><body>Test email OK</body></html>" > test.html
+          python scripts/send_email.py --subject "Delran TEST" --html-body test.html
+
+      - name: Run scraper (ungated)
+        env:
+          REPORT_TO:   ${{ secrets.REPORT_TO }}
+          REPORT_FROM: ${{ secrets.REPORT_FROM }}
+          MAIL_FROM:   ${{ secrets.MAIL_FROM }}
+
+          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:     ${{ secrets.SMTP_USER }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASS:     ${{ secrets.SMTP_PASS }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+
+          MAX_BOARDDOCS_FILES: "50"
+          MIN_YEAR: "2021"
+          DOC_DELAY_SECONDS: "2.0"
+          REQUEST_TIMEOUT: "60"
+        run: |
+          python scripts/scraper.py
+
+      - name: Inspect workspace for outputs
+        if: always()
+        run: |
+          echo "PWD: $(pwd)"
+          echo "----- find outputs (maxdepth=3) -----"
+          find . -maxdepth 3 -type f \( -name 'last_report.html' -o -name 'report.csv' -o -name 'scanned.csv' -o -name 'to_send.eml' -o -name 'sent_report.eml' \) -printf "%p\t%k KB\n" | sort || true
+          echo "----- .debug (if present) -----"
+          ls -la .debug || true
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: last_report
+          path: |
+            **/last_report.html
+            **/report.csv
+            **/scanned.csv
+            **/to_send.eml
+            **/sent_report.eml
+            **/.debug/**
+          if-no-files-found: ignore
+          retention-days: 7
