@@ -1,60 +1,30 @@
-# (this is the same clean, validated version you just deployed)
-# ADDITIONS near the email send section:
-# - Masked printout of email config
-# - Hard failure with clear reason if From/To missing
+"""
+Delran BOE Preschool Monitor – Scraper (Enhanced + Diagnostics, clean)
 
-# ... everything unchanged above ...
+What it does
+------------
+1) Crawls the Delran BOE Meeting Minutes and BOE pages for PDF/DOCX/HTML items.
+2) Optionally scans BoardDocs Public for PDFs (limited by MAX_BOARDDOCS_FILES).
+3) Extracts text and finds preschool-related mentions (via parser_utils.py).
+4) Builds HTML + CSV report and emails it monthly.
+5) Persists 'seen' match hashes in state.json to dedupe future runs.
+6) First run does a backfill from 2021-01-01 to today; then runs monthly.
+7) Writes a full audit log of *every* document seen to scanned.csv and
+   appends a "Documents scanned" section to the email.
+8) If discovery returns 0 links, saves the raw Minutes/BOE HTML and items.json
+   under .debug/ to quickly diagnose site/layout changes.
 
-    # Email
-    to_addr = os.environ.get("REPORT_TO") or "robwaz@delrankids.net"
-    from_addr = os.environ.get("REPORT_FROM") or os.environ.get("MAIL_FROM")
-    smtp_host = os.environ.get("SMTP_HOST")
-    smtp_port = int(os.environ.get("SMTP_PORT") or "587")
-    smtp_user = os.environ.get("SMTP_USER") or os.environ.get("SMTP_USERNAME")
-    smtp_password = os.environ.get("SMTP_PASS") or os.environ.get("SMTP_PASSWORD")
+Environment (set in workflow or repo secrets)
+---------------------------------------------
+- DELRAN_MINUTES_URL   (default: https://www.delranschools.org/b_o_e/meeting_minutes)
+- DELRAN_BOE_URL       (default: https://www.delranschools.org/b_o_e)
+- BOARDDOCS_PUBLIC_URL (default: https://go.boarddocs.com/nj/delranschools/Board.nsf/Public)
 
-    # Masked logging (so you can see what will be used)
-    def _mask(s: str) -> str:
-        if not s: return ""
-        if "@" in s:
-            name, _, domain = s.partition("@")
-            return (name[:1] + "***@" + domain) if domain else "***"
-        return s[:2] + "***"
+- REPORT_TO                -> recipient (default: robwaz@delrankids.net)
+- REPORT_FROM or MAIL_FROM -> sender (one required for sending)
+- SMTP_HOST
+- SMTP_PORT                -> 587 (STARTTLS) or 465 (SSL)
+- SMTP_USER or SMTP_USERNAME
+- SMTP_PASS or SMTP_PASSWORD
 
-    print("Email config:",
-          "to=", _mask(to_addr),
-          "from=", _mask(from_addr),
-          "smtp=", (smtp_host or ""), "port=", smtp_port,
-          "user=", _mask(smtp_user))
-
-    can_send = all([to_addr, from_addr, smtp_host, smtp_port, smtp_user, smtp_password])
-    if not can_send:
-        raise RuntimeError("Email not sent: missing one of To/From/SMTP settings. "
-                           "Ensure REPORT_TO and REPORT_FROM (or MAIL_FROM) and SMTP_* secrets are set.")
-
-    subject = (
-        "Delran BOE – Preschool Mentions (Backfill " + str(datetime(2021,1,1).date())
-        + " → " + str(end.date()) + ")"
-        if is_backfill else
-        "Delran BOE – Preschool Mentions (" + start.date().isoformat()[:7] + ") Monthly Report"
-    )
-
-    send_email(
-        subject=subject,
-        html_body=html_report_full,
-        to_addr=to_addr,
-        from_addr=from_addr,
-        smtp_host=smtp_host,
-        smtp_port=smtp_port,
-        smtp_user=smtp_user,
-        smtp_password=smtp_password,
-    )
-
-    print(
-        "Email sent to " + to_addr
-        + ". Matches: " + str(sum(len(r["mentions"]) for r in results_for_email))
-        + "; items: " + str(len(results_for_email))
-        + "; scanned_total: " + str(len(scanned_log))
-    )
-
-# ... bottom 'if __name__ == "__main__":' block unchanged ...
+- STATE_FILE            -> default: state.json
