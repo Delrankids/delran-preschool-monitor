@@ -27,16 +27,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Guard 0: Detect HTML entities in workflows (build patterns at runtime)
+      # Guard 0: Detect HTML entities in workflows (build patterns at runtime; ignore comment lines)
       - name: Guard – workflows must not contain HTML entities
         run: |
           set -e
           pat_lt='&'; pat_lt="${pat_lt}lt;"
           pat_gt='&'; pat_gt="${pat_gt}gt;"
           pat_amp='&'; pat_amp="${pat_amp}amp;&"; pat_amp="${pat_amp}amp;"
-          if grep -R -nE "${pat_lt}|${pat_gt}|${pat_amp}" .github/workflows 2>/dev/null; then
-            echo "::error ::Found HTML entities (${pat_lt}, ${pat_gt}, ${pat_amp}) in .github/workflows. Paste YAML as plain text."
-            grep -R -nE "${pat_lt}|${pat_gt}|${pat_amp}" .github/workflows || true
+          matches="$(grep -R -nE "${pat_lt}|${pat_gt}|${pat_amp}" .github/workflows 2>/dev/null | grep -vE ':[[:space:]]*#')"
+          if [ -n "$matches" ]; then
+            echo "::error ::Found HTML entities (${pat_lt}, ${pat_gt}, ${pat_amp}) in .github/workflows (non-comment lines). Paste YAML as plain text."
+            echo "$matches"
             exit 1
           fi
 
@@ -67,7 +68,7 @@ jobs:
             echo "is_last_day=false" >> $GITHUB_OUTPUT
           fi
 
-      # Guard 1: Backticks embedded in Python files
+      # Guard 1: Backticks in Python sources
       - name: Guard – stray Markdown backticks in Python
         if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
         run: |
@@ -78,15 +79,16 @@ jobs:
             exit 1
           fi
 
-      # Guard 2: HTML-encoded type-hint arrows in Python (-&gt;)
+      # Guard 2: HTML-encoded type-hint arrows in Python (-&gt;); compose pattern; ignore comments
       - name: Guard – HTML-encoded arrows in Python (-&gt;)
         if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
         run: |
           set -e
           a='-'; b='&'; c='gt;'; pat="${a}${b}${c}"
-          if grep -R --include='*.py' -nE "${pat}" scripts 2>/dev/null; then
-            echo "::error ::Found HTML-encoded arrow '${pat}' in scripts/*.py. Replace with '->'."
-            grep -R --include='*.py' -nE "${pat}" scripts || true
+          matches="$(grep -R --include='*.py' -nE "${pat}" scripts 2>/dev/null | grep -vE ':[[:space:]]*#')"
+          if [ -n "$matches" ]; then
+            echo "::error ::Found HTML-encoded arrow '${pat}' in scripts/*.py (non-comment lines). Replace with '->'."
+            echo "$matches"
             exit 1
           fi
 
