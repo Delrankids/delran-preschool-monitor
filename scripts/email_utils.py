@@ -126,3 +126,4 @@ def render_html_report(results: List[Dict]) -> str:
         "</html>"
     )
     return html
+``
