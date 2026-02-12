@@ -48,8 +48,8 @@ jobs:
       - name: Guard - workflows must not contain HTML entities
         run: |
           set -e
-          if grep -RIn --include="*.yml" -E "&lt;|&gt;|&amp;" .github/workflows; then
-            echo "::error ::HTML entities detected. Replace &lt; &gt; &amp; with literal < > &"
+          if grep -RIn --include="*.yml" -E "<|>|&" .github/workflows; then
+            echo "::error ::HTML entities detected. Replace < > & with literal < > &"
             exit 1
           fi
 
@@ -72,8 +72,8 @@ jobs:
 
       - name: Guard - HTML-encoded arrows in Python files
         run: |
-          if grep -RIn --include="*.py" "-&gt;" scripts; then
-            echo "::error ::Found HTML-encoded arrow '-&gt;' in python files. Replace with '->'"
+          if grep -RIn --include="*.py" "->" scripts; then
+            echo "::error ::Found HTML-encoded arrow '->' in python files. Replace with '->'"
             exit 1
           fi
 
