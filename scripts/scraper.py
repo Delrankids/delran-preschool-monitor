@@ -8,7 +8,7 @@ import hashlib
 import logging
 from typing import List, Dict, Optional, Tuple
 from urllib.parse import urljoin, urlparse
-from datetime import datetime, timedelta
+from datetime import datetime
 import html as _html
 
 import requests
@@ -127,8 +127,8 @@ def get_boarddocs_links(max_files: int) -> List[Dict[str, str]]:
         try:
             resp = fetch(url)
         except Exception as e:
-          logging.warning("BoardDocs fetch failed %s: %s", url, str(e))
-          continue
+            logging.warning("BoardDocs fetch failed %s: %s", url, str(e))
+            continue
         soup = BeautifulSoup(resp.text, "lxml")
         for a in soup.find_all("a", href=True):
             href = a["href"]
@@ -220,7 +220,7 @@ def within_range(iso_dt: Optional[str], start: datetime, end: datetime) -> bool:
         return True
 
 
-# -------------------------------- Main ------------------------------
+# ----------------------------- State --------------------------------
 
 def load_state() -> Dict:
     state = {"seen_hashes": [], "backfill_done": False, "last_run_end": None}
@@ -238,6 +238,9 @@ def save_state(state: Dict) -> None:
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
 
+
+# -------------------------------- Main ------------------------------
+
 def main() -> None:
     # Defer imports so the outer catcher can render last_report.html on import errors
     from parser_utils import find_preschool_mentions, guess_meeting_date
@@ -247,7 +250,7 @@ def main() -> None:
     start, end, is_backfill = compute_run_range(state)
     logging.info("Date range: %s -> %s (backfill=%s)", start.date(), end.date(), is_backfill)
 
-    # Create placeholder outputs early so artifacts always exist
+    # Create placeholders early so artifacts always exist
     try:
         if not os.path.exists("report.csv"):
             with open("report.csv", "w", encoding="utf-8", newline="") as cf:
@@ -292,33 +295,3 @@ def main() -> None:
         source = item.get("source") or ""
 
         try:
-            text = extract_text_for_url(item)
-        except Exception as e:
-            scanned_log.append({
-                "date": "",
-                "source": source,
-                "title": title,
-                "url": url,
-                "status": "error",
-                "reason": "fetch/extract error: " + str(e)
-            })
-            continue
-
-        if not text:
-            scanned_log.append({
-                "date": "",
-                "source": source,
-                "title": title,
-                "url": url,
-                "status": "skipped",
-                "reason": "no text extracted"
-            })
-            continue
-
-        mentions = find_preschool_mentions(text)
-        meeting_dt = guess_meeting_date(text, title=title, url=url)
-        iso_date = meeting_dt.isoformat() if meeting_dt else None
-
-        if (MIN_YEAR is not None) and meeting_dt and meeting_dt.year < MIN_YEAR:
-            scanned_log.append({
-                "date": meeting_dt.date().isoformat(),
