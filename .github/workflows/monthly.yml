@@ -1,20 +1,47 @@
-name: Delran Preschool Monitor (Monthly)
+name: "Delran Preschool Monitor (Monthly)"
 
-on:
+"on":
+  # Runs daily between the 28th–31st at 12:00 UTC; an internal step
+  # checks whether "today" is the last day of the month.
   schedule:
     - cron: "0 12 28-31 * *"
   workflow_dispatch:
     inputs:
-      force:
-        description: "Run immediately"
-        required: false
-        type: boolean
-        default: true
       send_test:
-        description: "Send a one-time test email"
+        description: "Send a one-time test email first"
         required: false
         type: boolean
         default: false
+      override_last_day:
+        description: "Run even if today is not the last day of month (manual only)"
+        required: false
+        type: boolean
+        default: false
+      force_full_rescan:
+        description: "Force a full rescan (ignore state.json) — use sparingly"
+        required: false
+        type: boolean
+        default: false
+      year:
+        description: "Optional: limit to a single year (e.g., 2024). Leave empty for normal monthly range."
+        required: false
+        type: string
+        default: ""
+      max_boarddocs_files:
+        description: "Cap BoardDocs discovery (75 is fine for monthly)"
+        required: false
+        type: number
+        default: 75
+      debug_save_html:
+        description: "Save fetched HTML to .debug/ (normally OFF for monthly)"
+        required: false
+        type: boolean
+        default: false
+      doc_delay_seconds:
+        description: "Delay between doc fetches (seconds)"
+        required: false
+        type: string
+        default: "1.5"
 
 permissions:
   contents: write
@@ -27,20 +54,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Guard 0: Detect HTML entities in workflows (rich-text paste). Robust and non self-triggering.
-      - name: Guard – workflows must not contain HTML entities
+      # Guard 0: Detect HTML entities introduced by copy/paste
+      - name: Guard - workflows must not contain HTML entities
         run: |
           set -e
-          pat_lt='&'; pat_lt="${pat_lt}lt;"
-          pat_gt='&'; pat_gt="${pat_gt}gt;"
-          pat_amp='&'; pat_amp="${pat_amp}amp;&"; pat_amp="${pat_amp}amp;"
+          pat_lt='&lt;'
+          pat_gt='&gt;'
+          pat_amp='&amp;'
           tmp="$(mktemp)"
           (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
           if grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" >/dev/null 2>&1; then
             echo "::group::HTML entity matches (non-comment lines)"
             grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
             echo "::endgroup::"
-            echo "::error ::Found HTML entities (${pat_lt}, ${pat_gt}, ${pat_amp}) in .github/workflows (non-comment lines). Paste YAML as plain text."
+            echo "::error ::Found HTML entities (&lt;, &gt;, &amp;) in .github/workflows (non-comment lines). Paste YAML as plain text."
             rm -f "$tmp"
             exit 1
           fi
@@ -56,26 +83,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r scripts/requirements.txt
 
-      - name: Determine if last day-of-month
-        id: lastday
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "is_last_day=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          TODAY=$(date -u +%Y-%m-%d)
-          TOMORROW=$(date -u -d "$TODAY + 1 day" +%Y-%m-%d)
-          M1=$(date -u -d "$TODAY" +%m)
-          M2=$(date -u -d "$TOMORROW" +%m)
-          if [ "$M1" != "$M2" ]; then
-            echo "is_last_day=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_last_day=false" >> $GITHUB_OUTPUT
-          fi
-
-      # Guard 1: Backticks in Python sources
-      - name: Guard – stray Markdown backticks in Python
-        if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
+      # Guard 1: Backticks embedded in Python files
+      - name: Guard - stray Markdown backticks in Python
         run: |
           set -e
           if grep -R --include='*.py' -nE '```|^`$' scripts 2>/dev/null; then
@@ -84,9 +93,8 @@ jobs:
             exit 1
           fi
 
-      # Guard 2: HTML-encoded type-hint arrows in Python. Robust and non self-triggering.
-      - name: Guard – HTML-encoded arrows in Python
-        if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
+      # Guard 2: HTML-encoded type-hint arrows in Python
+      - name: Guard - HTML-encoded arrows in Python
         run: |
           set -e
           a='-'; b='&'; c='gt;'; pat="${a}${b}${c}"
@@ -104,7 +112,6 @@ jobs:
           rm -f "$tmp"
 
       - name: Python syntax check
-        if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
         run: |
           python - <<'PY'
           import py_compile, glob
@@ -113,8 +120,28 @@ jobs:
               print("OK", f)
           PY
 
+      - name: Determine if last day-of-month
+        id: lastday
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          TOMORROW=$(date -u -d "$TODAY + 1 day" +%Y-%m-%d)
+          M1=$(date -u -d "$TODAY" +%m)
+          M2=$(date -u -d "$TOMORROW" +%m)
+          if [ "$M1" != "$M2" ]; then
+            echo "is_last_day=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_last_day=false" >> $GITHUB_OUTPUT
+          fi
+          echo "today=$TODAY" >> $GITHUB_OUTPUT
+
+      - name: Show schedule gate decision
+        run: |
+          echo "is_last_day = ${{ steps.lastday.outputs.is_last_day }}"
+          echo "event       = ${{ github.event_name }}"
+          echo "override    = ${{ github.event.inputs.override_last_day }}"
+
       - name: SMTP quick test
-        if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
+        if: ${{ steps.lastday.outputs.is_last_day == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.override_last_day == 'true') }}
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -123,91 +150,3 @@ jobs:
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: |
-          python - <<'PY'
-          import os, smtplib, ssl, sys
-          host=os.environ.get("SMTP_HOST")
-          port=int(os.environ.get("SMTP_PORT") or 587)
-          user=os.environ.get("SMTP_USER") or os.environ.get("SMTP_USERNAME")
-          pwd=os.environ.get("SMTP_PASS") or os.environ.get("SMTP_PASSWORD")
-          if not all([host,user,pwd]):
-              print("Missing SMTP credentials.")
-              sys.exit(1)
-          try:
-              if port==465:
-                  with smtplib.SMTP_SSL(host,port,timeout=20) as s:
-                      s.login(user,pwd)
-              else:
-                  with smtplib.SMTP(host,port,timeout=20) as s:
-                      s.starttls(context=ssl.create_default_context())
-                      s.login(user,pwd)
-              print("SMTP login ok.")
-          except Exception as e:
-              print("SMTP login failed:", e)
-              sys.exit(1)
-          PY
-
-      - name: Send test email (optional)
-        if: ${{ steps.lastday.outputs.is_last_day == 'true' && github.event.inputs.send_test == 'true' }}
-        env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
-          MAIL_TO:   ${{ secrets.REPORT_TO }}
-        run: |
-          echo "<html><body>Test email OK</body></html>" > test.html
-          python scripts/send_email.py --subject "Delran TEST" --html-body test.html
-
-      - name: Run scraper
-        if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
-        env:
-          REPORT_TO:   ${{ secrets.REPORT_TO }}
-          REPORT_FROM: ${{ secrets.REPORT_FROM }}
-          MAIL_FROM:   ${{ secrets.MAIL_FROM }}
-
-          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
-          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
-          SMTP_USER:     ${{ secrets.SMTP_USER }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASS:     ${{ secrets.SMTP_PASS }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-
-          MAX_BOARDDOCS_FILES: "50"
-          MIN_YEAR: "2021"
-          DOC_DELAY_SECONDS: "2.0"
-          REQUEST_TIMEOUT: "60"
-        run: |
-          python scripts/scraper.py
-
-      - name: Inspect workspace
-        if: always()
-        run: |
-          echo "PWD: $(pwd)"
-          find . -maxdepth 3 -type f -printf "%p\n" | sort
-
-      - name: Commit updated state.json
-        if: always()
-        run: |
-          if [ -f state.json ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add state.json
-            git commit -m "update state.json" || echo "no changes"
-            git push || true
-          fi
-
-      - name: Upload report artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: last_report
-          path: |
-            **/last_report.html
-            **/report.csv
-            **/scanned.csv
-            **/to_send.eml
-            **/sent_report.eml
-            **/.debug/**
-          if-no-files-found: ignore
-          retention-days: 7
