@@ -55,9 +55,9 @@ jobs:
             exit 1
           fi
 
-      # Guard 2: HTML-encoded type-hint arrows in Python (-&gt;).
+      # Guard 2: HTML-encoded type-hint arrows in Python ('-&gt;' pattern).
       # Compose the pattern at runtime; ignore comment lines.
-      - name: Guard – HTML-encoded arrows in Python (-&gt;)
+      - name: Guard – HTML-encoded arrows in Python
         run: |
           set -e
           a='-'; b='&'; c='gt;'; pat="${a}${b}${c}"
