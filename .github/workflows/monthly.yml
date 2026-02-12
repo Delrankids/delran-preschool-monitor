@@ -64,7 +64,7 @@ jobs:
           M2=$(date -u -d "$TOMORROW" +%m)
           if [ "$M1" != "$M2" ]; then
             echo "is_last_day=true" >> $GITHUB_OUTPUT
-          else
+          else:
             echo "is_last_day=false" >> $GITHUB_OUTPUT
           fi
 
@@ -79,8 +79,8 @@ jobs:
             exit 1
           fi
 
-      # Guard 2: HTML-encoded type-hint arrows in Python (-&gt;); compose pattern; ignore comments
-      - name: Guard – HTML-encoded arrows in Python (-&gt;)
+      # Guard 2: HTML-encoded type-hint arrows in Python (compose pattern; ignore comments)
+      - name: Guard – HTML-encoded arrows in Python
         if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
         run: |
           set -e
