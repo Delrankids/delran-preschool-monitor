@@ -1,8 +1,6 @@
-Workflow file for this run
-.github/workflows/ad_hoc_debug.yml at 6225c7f
-name: Delran Preschool Monitor (Ad-hoc Debug)
+name: "Delran Preschool Monitor (Ad-hoc Debug)"
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       send_test:
@@ -47,15 +45,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Guard 0: Detect HTML entities in workflows (rich-text paste). Robust and non self-triggering.
-      - name: Guard – workflows must not contain HTML entities
+      # Guard 0: Detect HTML entities introduced by copy/paste
+      - name: Guard - workflows must not contain HTML entities
         run: |
           set -e
           pat_lt='&lt;'
           pat_gt='&gt;'
-          pat_amp='&amp;amp;'
+          pat_amp='&amp;'
           tmp="$(mktemp)"
-          # Concatenate workflows, drop pure comment lines, then scan
           (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
           if grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" >/dev/null 2>&1; then
             echo "::group::HTML entity matches (non-comment lines)"
@@ -66,6 +63,7 @@ jobs:
             exit 1
           fi
           rm -f "$tmp"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -75,8 +73,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r scripts/requirements.txt
+
       # Guard 1: Backticks embedded in Python files
-      - name: Guard – stray Markdown backticks in Python
+      - name: Guard - stray Markdown backticks in Python
         run: |
           set -e
           if grep -R --include='*.py' -nE '```|^`$' scripts 2>/dev/null; then
@@ -84,14 +83,14 @@ jobs:
             grep -R --include='*.py' -nE '```|^`$' scripts || true
             exit 1
           fi
-      # Guard 2: HTML-encoded type-hint arrows in Python. Robust and non self-triggering.
-      - name: Guard – HTML-encoded arrows in Python
+
+      # Guard 2: HTML-encoded type-hint arrows in Python
+      - name: Guard - HTML-encoded arrows in Python
         run: |
           set -e
           a='-'; b='&'; c='gt;'; pat="${a}${b}${c}"
           tmp="$(mktemp)"
           (grep -R --include='*.py' -nE "${pat}" scripts 2>/dev/null || true) > "$tmp"
-          # Ignore comment-only hits
           matches="$(awk -F: '$0 !~ /:[[:space:]]*#/ {print}' "$tmp")"
           if [ -n "$matches" ]; then
             echo "::group::Encoded arrow matches (non-comment lines)"
@@ -102,6 +101,7 @@ jobs:
             exit 1
           fi
           rm -f "$tmp"
+
       - name: Python syntax check
         run: |
           python - <<'PY'
@@ -110,6 +110,7 @@ jobs:
               py_compile.compile(f, doraise=True)
               print("OK", f)
           PY
+
       - name: SMTP quick test
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -130,81 +131,3 @@ jobs:
               sys.exit(1)
           try:
               if port==465:
-                  with smtplib.SMTP_SSL(host,port,timeout=20) as s:
-                      s.login(user,pwd)
-              else:
-                  with smtplib.SMTP(host,port,timeout=20) as s:
-                      s.starttls(context=ssl.create_default_context())
-                      s.login(user,pwd)
-              print("SMTP login ok.")
-          except Exception as e:
-              print("SMTP login failed:", e)
-              sys.exit(1)
-          PY
-      - name: Send test email (optional)
-        if: ${{ github.event.inputs.send_test == 'true' }}
-        env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
-          MAIL_TO:   ${{ secrets.REPORT_TO }}
-        run: |
-          echo "<html><body>Test email OK</body></html>" > test.html
-          python scripts/send_email.py --subject "Delran TEST" --html-body test.html
-      - name: Show effective run configuration
-        run: |
-          echo "force_full_rescan = ${{ github.event.inputs.force_full_rescan }}"
-          echo "debug_save_html   = ${{ github.event.inputs.debug_save_html }}"
-          echo "year              = ${{ github.event.inputs.year }}"
-          echo "max_boarddocs     = ${{ github.event.inputs.max_boarddocs_files }}"
-          echo "doc_delay_seconds = ${{ github.event.inputs.doc_delay_seconds }}"
-      - name: Run scraper (ungated)
-        env:
-          # Report & mail settings
-          REPORT_TO:   ${{ secrets.REPORT_TO }}
-          REPORT_FROM: ${{ secrets.REPORT_FROM }}
-          MAIL_FROM:   ${{ secrets.MAIL_FROM }}
-
-          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
-          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
-          SMTP_USER:     ${{ secrets.SMTP_USER }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASS:     ${{ secrets.SMTP_PASS }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-
-          # Scraper settings
-          MIN_YEAR: "2021"
-          REQUEST_TIMEOUT: "60"
-
-          # Inputs wired to env expected by the scraper
-          FORCE_FULL_RESCAN: ${{ github.event.inputs.force_full_rescan == 'true' && '1' || '0' }}
-          DEBUG_SAVE_HTML:   ${{ github.event.inputs.debug_save_html == 'true' && '1' || '0' }}
-          YEAR:              ${{ github.event.inputs.year }}
-          MAX_BOARDDOCS_FILES: ${{ github.event.inputs.max_boarddocs_files || '200' }}
-          DOC_DELAY_SECONDS:   ${{ github.event.inputs.doc_delay_seconds || '1.5' }}
-        run: |
-          python scripts/scraper.py
-      - name: Inspect workspace for outputs
-        if: always()
-        run: |
-          echo "PWD: $(pwd)"
-          echo "----- find outputs (maxdepth=3) -----"
-          find . -maxdepth 3 -type f \( -name 'last_report.html' -o -name 'report.csv' -o -name 'scanned.csv' -o -name 'to_send.eml' -o -name 'sent_report.eml' \) -printf "%p\t%k KB\n" | sort || true
-          echo "----- .debug (if present) -----"
-          ls -la .debug || true
-      - name: Upload report artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: last_report
-          path: |
-            **/last_report.html
-            **/report.csv
-            **/scanned.csv
-            **/to_send.eml
-            **/sent_report.eml
-            **/.debug/**
-          if-no-files-found: ignore
-          retention-days: 7
