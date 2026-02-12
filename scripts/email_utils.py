@@ -12,6 +12,11 @@ def _build_email_message(
     from_addr: str,
     reply_to: Optional[str] = None,
 ) -> EmailMessage:
+    """
+    Build an HTML email with a plain-text fallback.
+
+    Returns the EmailMessage object (used both for sending and saving .eml).
+    """
     # Normalize recipients
     recipients = [x.strip() for x in (to_addr or "").replace(";", ",").split(",") if x.strip()]
     if not recipients:
@@ -126,4 +131,3 @@ def render_html_report(results: List[Dict]) -> str:
         "</html>"
     )
     return html
-``
