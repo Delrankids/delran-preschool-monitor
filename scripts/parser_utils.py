@@ -10,10 +10,6 @@ from dateutil import parser as dateparser
 # --------------------------------------------------------------------
 # Keyword patterns (expanded)
 # --------------------------------------------------------------------
-# Notes:
-# - Normalizes many common variants of "pre-k" and childcare terms.
-# - Designed to capture realistic NJ BOE Preschool/UPK language.
-# - Regexes compiled case-insensitive.
 
 _PRESCHOOL_TERMS = [
     r"\bpreschool\b",
@@ -64,7 +60,6 @@ def _normalize_space(s: str) -> str:
 def _split_sentences(text: str) -> List[str]:
     """
     Lightweight heuristic: split on sentence punctuation or double line breaks.
-    Good enough for PDF‑extracted minutes.
     """
     text = text.replace("\r", "\n")
     text = _normalize_space(text)
@@ -84,7 +79,6 @@ def _bounded_context(text: str, match_span: Tuple[int, int], target_len: int = 2
     start = max(0, start)
     end = min(len(text_norm), end)
 
-    # Sentence-aware slicing
     sentences = _split_sentences(text_norm)
     abs_pos = 0
     idx = 0
@@ -96,8 +90,6 @@ def _bounded_context(text: str, match_span: Tuple[int, int], target_len: int = 2
         abs_pos = next_pos + 1
 
     chosen = sentences[idx:idx + 1]
-
-    # Include neighbors if too short
     if chosen and len(" ".join(chosen)) < target_len // 2:
         if idx > 0:
             chosen.insert(0, sentences[idx - 1])
@@ -106,7 +98,6 @@ def _bounded_context(text: str, match_span: Tuple[int, int], target_len: int = 2
 
     snippet = _normalize_space(" ".join(chosen))
 
-    # Clip snippet if extremely long
     if len(snippet) > target_len:
         mid = (start + end) // 2
         left = max(0, mid - target_len // 2)
@@ -244,12 +235,10 @@ def guess_meeting_date(text: str, title: str = "", url: str = "") -> Optional[da
     """
     candidates: List[Tuple[datetime, str]] = []
 
-    # Title / URL first
     for origin, chunk in (("title", title or ""), ("url", url or "")):
         for dt in _parse_candidates_from_text(chunk):
             candidates.append((dt, origin))
 
-    # Hint windows in text
     if text:
         tnorm = _normalize_space(text)
         for m in DATE_HINT_WINDOW_RE.finditer(tnorm):
@@ -259,7 +248,6 @@ def guess_meeting_date(text: str, title: str = "", url: str = "") -> Optional[da
             for dt in _parse_candidates_from_text(window):
                 candidates.append((dt, "hint-window"))
 
-    # Full-text fallback
     if not candidates and text:
         for dt in _parse_candidates_from_text(text):
             candidates.append((dt, "body"))
