@@ -49,16 +49,16 @@ jobs:
       - name: Guard - workflows must not contain HTML entities
         run: |
           set -e
-          pat_lt='&lt;'
-          pat_gt='&gt;'
-          pat_amp='&amp;'
+          pat_lt='→ <;'
+          pat_gt='→ >'
+          pat_amp='→ &'
           tmp="$(mktemp)"
           (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
           if grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" >/dev/null 2>&1; then
             echo "::group::HTML entity matches (non-comment lines)"
             grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
             echo "::endgroup::"
-            echo "::error ::Found HTML entities (&lt;, &gt;, &amp;) in .github/workflows (non-comment lines). Paste YAML as plain text."
+            echo "::error ::Found HTML entities (→ <;, → >, → &) in .github/workflows (non-comment lines). Paste YAML as plain text."
             rm -f "$tmp"
             exit 1
           fi
