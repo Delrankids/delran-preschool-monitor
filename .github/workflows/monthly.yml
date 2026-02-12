@@ -27,6 +27,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Guard 0: Detect HTML entities in workflows
+      - name: Guard – workflows must not contain HTML entities
+        run: |
+          set -e
+          if grep -R -nE '&lt;|&gt;|&amp;&amp;' .github/workflows 2>/dev/null; then
+            echo "::error ::Found HTML entities (&lt;, &gt;, &amp;&amp;) in .github/workflows. Paste YAML as plain text."
+            grep -R -nE '&lt;|&gt;|&amp;&amp;' .github/workflows || true
+            exit 1
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -54,11 +64,25 @@ jobs:
             echo "is_last_day=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Guard against stray Markdown backticks
+      # Guard 1: Backticks
+      - name: Guard – stray Markdown backticks in Python
         if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
         run: |
+          set -e
           if grep -R --include='*.py' -nE '```|^`$' scripts 2>/dev/null; then
-            echo "::error ::Found stray Markdown backticks."
+            echo "::error ::Found Markdown code fences/backticks inside scripts/*.py"
+            grep -R --include='*.py' -nE '```|^`$' scripts || true
+            exit 1
+          fi
+
+      # Guard 2: HTML-encoded arrows
+      - name: Guard – HTML-encoded arrows in Python ( -&gt; )
+        if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
+        run: |
+          set -e
+          if grep -R --include='*.py' -nE '\-\&gt;' scripts 2>/dev/null; then
+            echo "::error ::Found HTML-encoded arrow '-&gt;' in scripts/*.py. Replace with '->'."
+            grep -R --include='*.py' -nE '\-\&gt;' scripts || true
             exit 1
           fi
 
@@ -67,7 +91,7 @@ jobs:
         run: |
           python - <<'PY'
           import py_compile, glob
-          for f in glob.glob("scripts/*.py"):
+          for f in sorted(glob.glob("scripts/*.py")):
               py_compile.compile(f, doraise=True)
               print("OK", f)
           PY
@@ -147,26 +171,3 @@ jobs:
 
       - name: Commit updated state.json
         if: always()
-        run: |
-          if [ -f state.json ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add state.json
-            git commit -m "update state.json" || echo "no changes"
-            git push || true
-          fi
-
-      - name: Upload report artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: last_report
-          path: |
-            **/last_report.html
-            **/report.csv
-            **/scanned.csv
-            **/to_send.eml
-            **/sent_report.eml
-            **/.debug/**
-          if-no-files-found: ignore
-          retention-days: 7
