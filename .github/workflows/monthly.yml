@@ -73,7 +73,7 @@ jobs:
             echo "is_last_day=false" >> $GITHUB_OUTPUT
           fi
 
-      # Guard 1: Backticks embedded in Python files
+      # Guard 1: Backticks in Python sources
       - name: Guard – stray Markdown backticks in Python
         if: ${{ steps.lastday.outputs.is_last_day == 'true' }}
         run: |
@@ -164,14 +164,14 @@ jobs:
         env:
           REPORT_TO:   ${{ secrets.REPORT_TO }}
           REPORT_FROM: ${{ secrets.REPORT_FROM }}
-          MAIL_FROM:   ${{ secrets/MAIL_FROM }}
+          MAIL_FROM:   ${{ secrets.MAIL_FROM }}
 
-          SMTP_HOST:   ${{ secrets/SMTP_HOST }}
-          SMTP_PORT:   ${{ secrets/SMTP_PORT }}
-          SMTP_USER:     ${{ secrets/SMTP_USER }}
-          SMTP_USERNAME: ${{ secrets/SMTP_USERNAME }}
-          SMTP_PASS:     ${{ secrets/SMTP_PASS }}
-          SMTP_PASSWORD: ${{ secrets/SMTP_PASSWORD }}
+          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:     ${{ secrets.SMTP_USER }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASS:     ${{ secrets.SMTP_PASS }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
 
           MAX_BOARDDOCS_FILES: "50"
           MIN_YEAR: "2021"
