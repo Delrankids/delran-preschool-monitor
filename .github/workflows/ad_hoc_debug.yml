@@ -20,20 +20,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Guard 0: Detect HTML entities in workflows (caused by rich-text paste).
-      # Build the patterns at runtime; ignore comment lines so this file doesn't self-trigger.
+      # Guard 0: Detect HTML entities in workflows (rich-text paste). Robust and non self-triggering.
       - name: Guard – workflows must not contain HTML entities
         run: |
           set -e
           pat_lt='&'; pat_lt="${pat_lt}lt;"
           pat_gt='&'; pat_gt="${pat_gt}gt;"
           pat_amp='&'; pat_amp="${pat_amp}amp;&"; pat_amp="${pat_amp}amp;"
-          matches="$(grep -R -nE "${pat_lt}|${pat_gt}|${pat_amp}" .github/workflows 2>/dev/null | grep -vE ':[[:space:]]*#')"
-          if [ -n "$matches" ]; then
+          tmp="$(mktemp)"
+          # Concatenate workflows, drop pure comment lines, then scan
+          (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
+          if grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" >/dev/null 2>&1; then
+            echo "::group::HTML entity matches (non-comment lines)"
+            grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
+            echo "::endgroup::"
             echo "::error ::Found HTML entities (${pat_lt}, ${pat_gt}, ${pat_amp}) in .github/workflows (non-comment lines). Paste YAML as plain text."
-            echo "$matches"
+            rm -f "$tmp"
             exit 1
           fi
+          rm -f "$tmp"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -55,18 +60,24 @@ jobs:
             exit 1
           fi
 
-      # Guard 2: HTML-encoded type-hint arrows in Python ('-&gt;' pattern).
-      # Compose the pattern at runtime; ignore comment lines.
+      # Guard 2: HTML-encoded type-hint arrows in Python. Robust and non self-triggering.
       - name: Guard – HTML-encoded arrows in Python
         run: |
           set -e
           a='-'; b='&'; c='gt;'; pat="${a}${b}${c}"
-          matches="$(grep -R --include='*.py' -nE "${pat}" scripts 2>/dev/null | grep -vE ':[[:space:]]*#')"
+          tmp="$(mktemp)"
+          (grep -R --include='*.py' -nE "${pat}" scripts 2>/dev/null || true) > "$tmp"
+          # Ignore comment-only hits
+          matches="$(awk -F: '$0 !~ /:[[:space:]]*#/ {print}' "$tmp")"
           if [ -n "$matches" ]; then
-            echo "::error ::Found HTML-encoded arrow '${pat}' in scripts/*.py (non-comment lines). Replace with '->'."
+            echo "::group::Encoded arrow matches (non-comment lines)"
             echo "$matches"
+            echo "::endgroup::"
+            echo "::error ::Found HTML-encoded arrow '${pat}' in scripts/*.py (non-comment lines). Replace with '->'."
+            rm -f "$tmp"
             exit 1
           fi
+          rm -f "$tmp"
 
       - name: Python syntax check
         run: |
