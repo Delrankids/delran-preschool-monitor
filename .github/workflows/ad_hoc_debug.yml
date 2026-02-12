@@ -8,6 +8,31 @@ on:
         required: false
         type: boolean
         default: false
+      force_full_rescan:
+        description: "Force a full rescan (ignore state.json) – recommended for first run"
+        required: false
+        type: boolean
+        default: true
+      debug_save_html:
+        description: "Save fetched HTML to .debug/ for diagnostics"
+        required: false
+        type: boolean
+        default: true
+      year:
+        description: "Limit to a single year (e.g., 2023). Leave empty for all years."
+        required: false
+        type: string
+        default: ""
+      max_boarddocs_files:
+        description: "Cap BoardDocs discovery (recommend 200 for first backfill)"
+        required: false
+        type: number
+        default: 200
+      doc_delay_seconds:
+        description: "Delay between document fetches (seconds)"
+        required: false
+        type: string
+        default: "1.5"
 
 permissions:
   contents: write
@@ -24,9 +49,9 @@ jobs:
       - name: Guard – workflows must not contain HTML entities
         run: |
           set -e
-          pat_lt='&'; pat_lt="${pat_lt}lt;"
-          pat_gt='&'; pat_gt="${pat_gt}gt;"
-          pat_amp='&'; pat_amp="${pat_amp}amp;&"; pat_amp="${pat_amp}amp;"
+          pat_lt='&lt;'
+          pat_gt='&gt;'
+          pat_amp='&amp;amp;'
           tmp="$(mktemp)"
           # Concatenate workflows, drop pure comment lines, then scan
           (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
@@ -34,7 +59,7 @@ jobs:
             echo "::group::HTML entity matches (non-comment lines)"
             grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
             echo "::endgroup::"
-            echo "::error ::Found HTML entities (${pat_lt}, ${pat_gt}, ${pat_amp}) in .github/workflows (non-comment lines). Paste YAML as plain text."
+            echo "::error ::Found HTML entities (&lt;, &gt;, &amp;) in .github/workflows (non-comment lines). Paste YAML as plain text."
             rm -f "$tmp"
             exit 1
           fi
@@ -133,8 +158,17 @@ jobs:
           echo "<html><body>Test email OK</body></html>" > test.html
           python scripts/send_email.py --subject "Delran TEST" --html-body test.html
 
+      - name: Show effective run configuration
+        run: |
+          echo "force_full_rescan = ${{ github.event.inputs.force_full_rescan }}"
+          echo "debug_save_html   = ${{ github.event.inputs.debug_save_html }}"
+          echo "year              = ${{ github.event.inputs.year }}"
+          echo "max_boarddocs     = ${{ github.event.inputs.max_boarddocs_files }}"
+          echo "doc_delay_seconds = ${{ github.event.inputs.doc_delay_seconds }}"
+
       - name: Run scraper (ungated)
         env:
+          # Report & mail settings
           REPORT_TO:   ${{ secrets.REPORT_TO }}
           REPORT_FROM: ${{ secrets.REPORT_FROM }}
           MAIL_FROM:   ${{ secrets.MAIL_FROM }}
@@ -146,10 +180,16 @@ jobs:
           SMTP_PASS:     ${{ secrets.SMTP_PASS }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
 
-          MAX_BOARDDOCS_FILES: "50"
+          # Scraper settings
           MIN_YEAR: "2021"
-          DOC_DELAY_SECONDS: "2.0"
           REQUEST_TIMEOUT: "60"
+
+          # Inputs wired to env expected by the scraper
+          FORCE_FULL_RESCAN: ${{ github.event.inputs.force_full_rescan == 'true' && '1' || '0' }}
+          DEBUG_SAVE_HTML:   ${{ github.event.inputs.debug_save_html == 'true' && '1' || '0' }}
+          YEAR:              ${{ github.event.inputs.year }}
+          MAX_BOARDDOCS_FILES: ${{ github.event.inputs.max_boarddocs_files || '200' }}
+          DOC_DELAY_SECONDS:   ${{ github.event.inputs.doc_delay_seconds || '1.5' }}
         run: |
           python scripts/scraper.py
 
