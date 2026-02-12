@@ -475,7 +475,7 @@ def highlight_keywords_in_html(html: str, regex: re.Pattern) -> str:
         parent = tn.parent
         if not parent or getattr(parent, "name", "").lower() in ("script", "style"):
             continue
-        # Don't mutate attribute values—only visible text nodes
+        # Only mutate visible text nodes
         _highlight_text_node(soup, tn, regex)
     return str(soup)
 
@@ -491,3 +491,343 @@ def main() -> None:
     logging.info("Date range: %s -> %s (backfill=%s, FORCE_FULL_RESCAN=%s, YEAR=%s)",
                  start.date(), end.date(), is_backfill, FORCE_FULL_RESCAN, YEAR)
 
+    # Create placeholders early so artifacts always exist
+    try:
+        if not os.path.exists("report.csv"):
+            with open("report.csv", "w", encoding="utf-8", newline="") as cf:
+                w = csv.writer(cf)
+                w.writerow(["date", "source", "url", "keyword", "snippet"])
+        if not os.path.exists("scanned.csv"):
+            with open("scanned.csv", "w", encoding="utf-8", newline="") as sf:
+                w = csv.writer(sf)
+                w.writerow(["date", "source", "title", "url", "status", "reason"])
+        if not os.path.exists("last_report.html"):
+            with open("last_report.html", "w", encoding="utf-8") as f:
+                f.write("<html><body><h2>Delran BOE – Preschool Mentions</h2><p>(Initializing…)</p></body></html>")
+    except Exception as _e:
+        logging.warning("Could not create placeholder outputs: %s", _e)
+
+    # Discover
+    items: List[Dict[str, str]] = []
+    minutes = get_minutes_links()
+    items.extend(minutes)
+    items.extend(get_boarddocs_links(MAX_BOARDDOCS_FILES))
+
+    if not items:
+        ensure_debug_dir()
+        try:
+            with open(".debug/items.json", "w", encoding="utf-8") as f:
+                json.dump({
+                    "minutes_count": len(minutes),
+                    "items": items,
+                    "notes": "No items discovered. Inspect .debug/district_*.html and .debug/boarddocs_*.html."
+                }, f, indent=2)
+        except Exception as e:
+            logging.warning("Could not write .debug/items.json: %s", str(e))
+
+    # Scan
+    scanned_log: List[Dict[str, str]] = []
+    results_for_email: List[Dict] = []
+    rows_for_csv: List[List[str]] = []
+
+    seen_hashes = set(state.get("seen_hashes") or [])
+    new_hashes = set()
+
+    for item in items:
+        title = item.get("title") or "Meeting Item"
+        url = item["url"]
+        source = item.get("source") or ""
+
+        # Fetch/Extract safely
+        try:
+            text = extract_text_for_url(item)
+        except Exception as e:
+            scanned_log.append({
+                "date": "",
+                "source": source,
+                "title": title,
+                "url": url,
+                "status": "error",
+                "reason": f"fetch/extract error: {e}"
+            })
+            continue
+
+        if not text:
+            scanned_log.append({
+                "date": "",
+                "source": source,
+                "title": title,
+                "url": url,
+                "status": "skipped",
+                "reason": "no text extracted"
+            })
+            continue
+
+        mentions = find_preschool_mentions(text)
+        meeting_dt = guess_meeting_date(text, title=title, url=url)
+        iso_date = meeting_dt.isoformat() if meeting_dt else None
+
+        if (MIN_YEAR is not None) and meeting_dt and meeting_dt.year < MIN_YEAR:
+            scanned_log.append({
+                "date": meeting_dt.date().isoformat(),
+                "source": source,
+                "title": title,
+                "url": url,
+                "status": "skipped",
+                "reason": f"before MIN_YEAR {MIN_YEAR}"
+            })
+            continue
+
+        if not within_range(iso_date, start, end):
+            scanned_log.append({
+                "date": meeting_dt.date().isoformat() if meeting_dt else "",
+                "source": source,
+                "title": title,
+                "url": url,
+                "status": "skipped",
+                "reason": "out of date range"
+            })
+            continue
+
+        if not mentions:
+            scanned_log.append({
+                "date": meeting_dt.date().isoformat() if meeting_dt else "",
+                "source": source,
+                "title": title,
+                "url": url,
+                "status": "scanned",
+                "reason": "no preschool mentions"
+            })
+            continue
+
+        # Dedup within state
+        kept: List[Dict] = []
+        for m in mentions:
+            fp = sha1_of(url, m.get("keyword") or "", (m.get("snippet") or "")[:160])
+            if IGNORE_DEDUPE or fp not in seen_hashes:
+                kept.append(m)
+                new_hashes.add(fp)
+
+        if not kept:
+            scanned_log.append({
+                "date": meeting_dt.date().isoformat() if meeting_dt else "",
+                "source": source,
+                "title": title,
+                "url": url,
+                "status": "scanned",
+                "reason": "only duplicates (already reported)"
+            })
+            continue
+
+        results_for_email.append({
+            "title": title,
+            "url": url,
+            "date": meeting_dt.date().isoformat() if meeting_dt else "",
+            "mentions": kept
+        })
+
+        for m in kept:
+            rows_for_csv.append([
+                meeting_dt.date().isoformat() if meeting_dt else "",
+                source,
+                url,
+                m.get("keyword") or "",
+                (m.get("snippet") or "").strip()
+            ])
+
+        scanned_log.append({
+            "date": meeting_dt.date().isoformat() if meeting_dt else "",
+            "source": source,
+            "title": title,
+            "url": url,
+            "status": "matched",
+            "reason": f"{len(kept)} new mention(s)"
+        })
+
+    # Sort & write CSVs
+    def sort_key(r: Dict) -> Tuple[datetime, str]:
+        d = r.get("date")
+        try:
+            dt = dateparser.parse(d).date() if d else datetime(1970, 1, 1).date()
+        except Exception:
+            dt = datetime(1970, 1, 1).date()
+        return (dt, r.get("title") or "")
+    results_for_email.sort(key=sort_key, reverse=True)
+
+    with open("report.csv", "w", encoding="utf-8", newline="") as cf:
+        w = csv.writer(cf)
+        w.writerow(["date", "source", "url", "keyword", "snippet"])
+        for row in rows_for_csv:
+            w.writerow(row)
+
+    with open("scanned.csv", "w", encoding="utf-8", newline="") as sf:
+        w = csv.writer(sf)
+        w.writerow(["date", "source", "title", "url", "status", "reason"])
+        status_rank = {"matched": 0, "scanned": 1, "skipped": 2, "error": 3}
+        def s_key(x: Dict) -> Tuple[int, str, str]:
+            return (status_rank.get(x.get("status", "skipped"), 9), x.get("date") or "", x.get("title") or "")
+        for row in sorted(scanned_log, key=s_key):
+            w.writerow([
+                row.get("date") or "",
+                row.get("source") or "",
+                row.get("title") or "",
+                row.get("url") or "",
+                row.get("status") or "",
+                row.get("reason") or ""
+            ])
+
+    # Build HTML
+    from email_utils import render_html_report  # re-import to avoid linter complaints
+    html_report = render_html_report(results_for_email)
+
+    # Append audited "Documents scanned" section
+    totals = {
+        "matched": sum(1 for x in scanned_log if x.get("status") == "matched"),
+        "scanned": sum(1 for x in scanned_log if x.get("status") == "scanned"),
+        "skipped": sum(1 for x in scanned_log if x.get("status") == "skipped"),
+        "error": sum(1 for x in scanned_log if x.get("status") == "error"),
+        "total": len(scanned_log)
+    }
+
+    rows_html: List[str] = []
+    MAX_EMAIL_ROWS = 200
+    for i, r in enumerate(scanned_log):
+        if i >= MAX_EMAIL_ROWS:
+            rows_html.append("<li><em>…and " + str(len(scanned_log) - MAX_EMAIL_ROWS) + " more (see scanned.csv)</em></li>")
+            break
+        dt_html = (r.get("date") + " — ") if r.get("date") else ""
+        url_html = html_escape(r.get("url") or "")
+        title_html = html_escape(r.get("title") or "Document")
+        reason_html = html_escape(r.get("reason") or "")
+        rows_html.append(
+            "<li><strong>" + html_escape(r.get("status") or "") + "</strong> — "
+            + dt_html + title_html + " — "
+            + "<a href=\"" + url_html + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + url_html + "</a> "
+            + "(<em>" + reason_html + "</em>)</li>"
+        )
+
+    scanned_section = (
+        "<hr><details><summary><strong>Documents scanned</strong> — total "
+        + str(totals["total"])
+        + " (matched: " + str(totals["matched"])
+        + ", scanned/no-hit: " + str(totals["scanned"])
+        + ", skipped: " + str(totals["skipped"])
+        + ", error: " + str(totals["error"]) + ")"
+        + "</summary><p>Full audit log is attached as <code>scanned.csv</code> in workflow artifacts.</p>"
+        + "<ol style=\"margin-top: 6px;\">" + "".join(rows_html) + "</ol></details>"
+    )
+
+    if "</body>" in html_report:
+        html_report_full = html_report.replace("</body>", scanned_section + "\n</body>")
+    else:
+        html_report_full = html_report + scanned_section
+
+    # >>> Highlight keywords across the entire HTML <<<
+    html_report_full = highlight_keywords_in_html(html_report_full, KW_RE)
+
+    with open("last_report.html", "w", encoding="utf-8") as f:
+        f.write(html_report_full)
+
+    # Update state
+    if not IGNORE_DEDUPE and new_hashes:
+        state["seen_hashes"] = sorted(set(state.get("seen_hashes") or []) | new_hashes)
+    if is_backfill:
+        state["backfill_done"] = True
+    state["last_run_end"] = end.isoformat()
+    save_state(state)
+
+    # ------------------------------ Email ------------------------------
+    # Force From to the authenticated mailbox (same as TEST email).
+    to_addr = os.environ.get("REPORT_TO") or "robwaz@delrankids.net"
+    smtp_host = os.environ.get("SMTP_HOST")
+    smtp_port = int(os.environ.get("SMTP_PORT") or "587")
+    smtp_user = os.environ.get("SMTP_USER") or os.environ.get("SMTP_USERNAME")
+    smtp_password = os.environ.get("SMTP_PASS") or os.environ.get("SMTP_PASSWORD")
+
+    forced_from = smtp_user or ""
+    reply_to = os.environ.get("REPORT_FROM") or os.environ.get("MAIL_FROM") or None
+
+    def _mask(s: str) -> str:
+        if not s:
+            return ""
+        if "@" in s:
+            name, _, domain = s.partition("@")
+            return (name[:1] + "***@" + domain) if domain else "***"
+        return s[:2] + "***"
+
+    print("=== EMAIL PREP ===")
+    print("Email config:", "to=", _mask(to_addr), "from=", _mask(forced_from),
+          "reply_to=", _mask(reply_to or ""), "smtp=", smtp_host or "",
+          "port=", smtp_port, "user=", _mask(smtp_user))
+
+    can_send = all([to_addr, forced_from, smtp_host, smtp_port, smtp_user, smtp_password])
+    if not can_send:
+        raise RuntimeError("Email not sent: missing To/From/SMTP settings. "
+                           "Set REPORT_TO and SMTP_* secrets. From is forced to SMTP user.")
+
+    # Subject reflects YEAR/backfill/monthly modes
+    if YEAR is not None:
+        subject = f"Delran BOE – Preschool Mentions (Backfill {YEAR}-01-01 → {YEAR}-12-31)"
+    elif is_backfill:
+        subject = ("Delran BOE – Preschool Mentions (Backfill "
+                   + str(datetime(2021, 1, 1).date()) + " → " + str(datetime.utcnow().date()) + ")")
+    else:
+        subject = ("Delran BOE – Preschool Mentions (" + start.date().isoformat()[:7] + ") Monthly Report")
+
+    # Pre-build .eml (pre-send) for diagnostics
+    try:
+        from email_utils import _build_email_message
+        msg = _build_email_message(
+            subject=subject,
+            html_body=html_report_full,
+            to_addr=to_addr,
+            from_addr=forced_from,
+            reply_to=reply_to,
+        )
+        with open("to_send.eml", "wb") as pf:
+            pf.write(msg.as_bytes())
+        print("Saved to_send.eml (pre-send).")
+    except Exception as _pre:
+        print("!!! WARNING: Could not prebuild .eml:", _pre)
+
+    # Send and save final eml
+    from email_utils import send_email as _send_email
+    eml_bytes = _send_email(
+        subject=subject,
+        html_body=html_report_full,
+        to_addr=to_addr,
+        from_addr=forced_from,
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        smtp_user=smtp_user,
+        smtp_password=smtp_password,
+        reply_to=reply_to,
+    )
+    with open("sent_report.eml", "wb") as ef:
+        ef.write(eml_bytes)
+
+    print("=== EMAIL SENT === to " + to_addr
+          + " | Matches: " + str(sum(len(r["mentions"]) for r in results_for_email))
+          + " | Items: " + str(len(results_for_email))
+          + " | Scanned total: " + str(len(scanned_log)))
+
+
+# --------------------------- Entry point ----------------------------
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()
+        with open("last_report.html", "w", encoding="utf-8") as f:
+            f.write(
+                "<html><body>"
+                "<h2>Delran BOE – Monitor: Unhandled Error</h2>"
+                "<pre style=\"white-space: pre-wrap; font-family: monospace;\">"
+                + html_escape(tb) +
+                "</pre>"
+                "</body></html>"
+            )
+        print("Unhandled error; traceback written to last_report.html")
+        raise
