@@ -154,11 +154,32 @@ def get_boarddocs_links(max_files: int) -> List[Dict[str, str]]:
 # ---------------------------- Extraction ----------------------------
 
 def extract_text_for_url(item: Dict[str, str]) -> str:
-    # Local import to let outer catcher show errors in last_report.html
+    """
+    Fetch the resource and extract text depending on content type.
+    Supports: HTML (and follows first nested PDF/DOCX link), PDF, DOCX.
+    """
     from parser_utils import extract_text_from_pdf, extract_text_from_docx
 
     url_lower = item["url"].lower()
     path_guess = urlparse(url_lower).path.lower()
 
+    # Outer fetch (with proper try/except)
     try:
         resp = fetch(item["url"])
+    except Exception as e:
+        logging.warning("Fetch failed %s: %s", item["url"], str(e))
+        return ""
+
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+
+    # HTML page: follow a likely inner document if present; else scrape visible text
+    if "text/html" in ctype or path_guess.endswith((".htm", ".html")):
+        soup = BeautifulSoup(resp.text, "lxml")
+        for a in soup.find_all("a", href=True):
+            h = a.get("href") or ""
+            if not h:
+                continue
+            if h.lower().endswith(".pdf") or "DisplayFile.aspx" in h or "/files/" in h or h.lower().endswith(".docx"):
+                inner_url = urljoin(item["url"], h)
+                polite_delay()
+                try:
