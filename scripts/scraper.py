@@ -1,5 +1,5 @@
 # Delran BOE Preschool Monitor – Scraper (2026-02 rewrite for BoardDocs + CMS changes)
-# Full file with YEAR-based backfill + subject updates included
+# Full file with YEAR-based backfill + subject updates + keyword highlighting
 #
 # Key improvements:
 # - Robust discovery for BoardDocs attachments (dynamic pages) by parsing embedded script JSON
@@ -8,9 +8,10 @@
 # - Debug artifacts (.debug/*.html, items.json) to diagnose "0 scanned" cases.
 # - FORCE_FULL_RESCAN=1 support to override state.json on demand.
 # - YEAR=<yyyy> support to limit a run to a single calendar year.
+# - Keyword highlighting in the final HTML via <mark>.
 #
 # Outputs preserved: last_report.html, report.csv, scanned.csv, to_send.eml, sent_report.eml
-# Requires: parser_utils.py (extract_text_from_pdf, extract_text_from_docx, find_preschool_mentions, guess_meeting_date)
+# Requires: parser_utils.py (extract_text_from_pdf, extract_text_from_docx, find_preschool_mentions, guess_meeting_date, KEYWORD_REGEX)
 #           email_utils.py   (render_html_report, _build_email_message, send_email)
 
 import os
@@ -335,3 +336,158 @@ def extract_text_for_url(item: Dict[str, str]) -> str:
     if "/board.nsf/files/" in path_guess:
         polite_delay()
         try:
+            # Prefer to treat as PDF first; fall back to HTML parse if not PDF-ish
+            if "pdf" in ctype or resp.content[:4] == b"%PDF":
+                return extract_text_from_pdf(resp.content)
+        except Exception:
+            pass
+        # If not a PDF, try to parse HTML and follow any nested links
+        soup = BeautifulSoup(resp.text, "lxml")
+        for a in soup.find_all("a", href=True):
+            h = a.get("href") or ""
+            if "/Board.nsf/files/" in h or h.lower().endswith(".pdf"):
+                inner_url = urljoin(item["url"], h)
+                try:
+                    inner = fetch(inner_url, referer=item["url"])
+                except Exception as e:
+                    logging.warning("Inner fetch failed %s: %s", inner_url, e)
+                    continue
+                if (inner.headers.get("Content-Type") or "").lower().find("pdf") >= 0 or inner.content[:4] == b"%PDF":
+                    polite_delay()
+                    return extract_text_from_pdf(inner.content)
+        # Last resort: text from page
+        return " ".join(s.strip() for s in soup.stripped_strings)
+
+    if "text/html" in ctype or path_guess.endswith((".htm", ".html")):
+        soup = BeautifulSoup(resp.text, "lxml")
+        # Follow a likely inner document if present
+        for a in soup.find_all("a", href=True):
+            h = a.get("href") or ""
+            if not h:
+                continue
+            if h.lower().endswith(".pdf") or "DisplayFile.aspx" in h or "/files/" in h or "/Board.nsf/files/" in h or h.lower().endswith(".docx"):
+                inner_url = urljoin(item["url"], h)
+                polite_delay()
+                try:
+                    inner = fetch(inner_url, referer=item["url"])
+                except Exception as e:
+                    logging.warning("Inner fetch failed %s: %s", inner_url, e)
+                    continue
+                inner_ctype = (inner.headers.get("Content-Type") or "").lower()
+                if "application/pdf" in inner_ctype or inner_url.lower().endswith(".pdf") or inner.content[:4] == b"%PDF":
+                    polite_delay()
+                    return extract_text_from_pdf(inner.content)
+                if inner_url.lower().endswith(".docx"):
+                    polite_delay()
+                    return extract_text_from_docx(inner.content)
+        # Fallback: join visible text
+        return " ".join(s.strip() for s in soup.stripped_strings)
+
+    if "application/pdf" in ctype or path_guess.endswith(".pdf") or resp.content[:4] == b"%PDF":
+        polite_delay()
+        return extract_text_from_pdf(resp.content)
+
+    if path_guess.endswith(".docx"):
+        polite_delay()
+        return extract_text_from_docx(resp.content)
+
+    return ""
+
+# ----------------------- Date range calculation ---------------------
+
+def first_day_of_month(dt: datetime) -> datetime:
+    return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+def compute_run_range(state: Dict) -> Tuple[datetime, datetime, bool]:
+    today = datetime.utcnow()
+    if YEAR is not None:
+        # Jan 1 .. Dec 31 of the requested year
+        start = datetime(YEAR, 1, 1)
+        end = datetime(YEAR, 12, 31, 23, 59, 59)
+        return (start, end, True)
+    if FORCE_FULL_RESCAN:
+        return (datetime(2021, 1, 1), today, True)
+    if not state.get("backfill_done"):
+        return (datetime(2021, 1, 1), today, True)
+    return (first_day_of_month(today), today, False)
+
+def within_range(iso_dt: Optional[str], start: datetime, end: datetime) -> bool:
+    if not iso_dt:
+        return True
+    try:
+        dt = dateparser.parse(iso_dt).replace(tzinfo=None)
+        return (start <= dt <= end)
+    except Exception:
+        return True
+
+# ----------------------------- State --------------------------------
+
+def load_state() -> Dict:
+    state = {"seen_hashes": [], "backfill_done": False, "last_run_end": None}
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                state.update(data)
+        except Exception:
+            logging.warning("State file unreadable; starting fresh.")
+    return state
+
+def save_state(state: Dict) -> None:
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+
+# ------------------------- Highlighting ------------------------------
+
+# Reuse the same regex the detector uses to avoid drift.
+try:
+    from parser_utils import KEYWORD_REGEX as KW_RE
+except Exception:
+    # Fallback minimal set if import fails for any reason
+    KW_RE = re.compile(r"\b(preschool|pre[\s\-]?k|prek|upk|early\s+childhood|child[\s\-]?care|childcare|day[\s\-]?care|wrap[\s\-]?around|before\s+care|after\s+care|extended\s+day)\b", re.IGNORECASE)
+
+def _highlight_text_node(soup: BeautifulSoup, node, regex: re.Pattern):
+    """Replace matches in a NavigableString with <mark> elements."""
+    text = str(node)
+    parts = []
+    last = 0
+    for m in regex.finditer(text):
+        if m.start() > last:
+            parts.append(text[last:m.start()])
+        mark = soup.new_tag("mark")
+        # pale yellow background, subtle padding; inline so it survives email clients
+        mark["style"] = "background:#fff3cd;padding:0 2px 0 2px;border-radius:2px;"
+        mark.string = m.group(0)
+        parts.append(mark)
+        last = m.end()
+    if not parts:
+        return
+    if last < len(text):
+        parts.append(text[last:])
+    # Replace node with the sequence
+    node.replace_with(*parts)
+
+def highlight_keywords_in_html(html: str, regex: re.Pattern) -> str:
+    """Traverse HTML and wrap keyword matches in <mark>, skipping SCRIPT/STYLE."""
+    soup = BeautifulSoup(html, "lxml")
+    for tn in list(soup.find_all(string=True)):
+        parent = tn.parent
+        if not parent or getattr(parent, "name", "").lower() in ("script", "style"):
+            continue
+        # Don't mutate attribute values—only visible text nodes
+        _highlight_text_node(soup, tn, regex)
+    return str(soup)
+
+# -------------------------------- Main ------------------------------
+
+def main() -> None:
+    # Defer imports so the outer catcher can render last_report.html on import errors
+    from parser_utils import find_preschool_mentions, guess_meeting_date
+    from email_utils import render_html_report, _build_email_message, send_email as _send_email
+
+    state = load_state()
+    start, end, is_backfill = compute_run_range(state)
+    logging.info("Date range: %s -> %s (backfill=%s, FORCE_FULL_RESCAN=%s, YEAR=%s)",
+                 start.date(), end.date(), is_backfill, FORCE_FULL_RESCAN, YEAR)
+
