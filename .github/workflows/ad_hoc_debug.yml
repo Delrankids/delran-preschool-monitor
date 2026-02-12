@@ -20,6 +20,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Guard 0: Detect HTML entities in workflows (pasting as rich text)
+      - name: Guard – workflows must not contain HTML entities
+        run: |
+          set -e
+          if grep -R -nE '&lt;|&gt;|&amp;&amp;' .github/workflows 2>/dev/null; then
+            echo "::error ::Found HTML entities (&lt;, &gt;, &amp;&amp;) in .github/workflows. Paste YAML as plain text."
+            grep -R -nE '&lt;|&gt;|&amp;&amp;' .github/workflows || true
+            exit 1
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -30,11 +40,31 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r scripts/requirements.txt
 
+      # Guard 1: Backticks in Python sources
+      - name: Guard – stray Markdown backticks in Python
+        run: |
+          set -e
+          if grep -R --include='*.py' -nE '```|^`$' scripts 2>/dev/null; then
+            echo "::error ::Found Markdown code fences/backticks inside scripts/*.py"
+            grep -R --include='*.py' -nE '```|^`$' scripts || true
+            exit 1
+          fi
+
+      # Guard 2: HTML-encoded type-hint arrows in Python sources
+      - name: Guard – HTML-encoded arrows in Python ( -&gt; )
+        run: |
+          set -e
+          if grep -R --include='*.py' -nE '\-\&gt;' scripts 2>/dev/null; then
+            echo "::error ::Found HTML-encoded arrow '-&gt;' in scripts/*.py. Replace with '->'."
+            grep -R --include='*.py' -nE '\-\&gt;' scripts || true
+            exit 1
+          fi
+
       - name: Python syntax check
         run: |
           python - <<'PY'
           import py_compile, glob
-          for f in glob.glob("scripts/*.py"):
+          for f in sorted(glob.glob("scripts/*.py")):
               py_compile.compile(f, doraise=True)
               print("OK", f)
           PY
@@ -64,66 +94,3 @@ jobs:
               else:
                   with smtplib.SMTP(host,port,timeout=20) as s:
                       s.starttls(context=ssl.create_default_context())
-                      s.login(user,pwd)
-              print("SMTP login ok.")
-          except Exception as e:
-              print("SMTP login failed:", e)
-              sys.exit(1)
-          PY
-
-      - name: Send test email (optional)
-        if: ${{ github.event.inputs.send_test == 'true' }}
-        env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
-          MAIL_TO:   ${{ secrets.REPORT_TO }}
-        run: |
-          echo "<html><body>Test email OK</body></html>" > test.html
-          python scripts/send_email.py --subject "Delran TEST" --html-body test.html
-
-      - name: Run scraper (ungated)
-        env:
-          REPORT_TO:   ${{ secrets.REPORT_TO }}
-          REPORT_FROM: ${{ secrets.REPORT_FROM }}
-          MAIL_FROM:   ${{ secrets.MAIL_FROM }}
-
-          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
-          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
-          SMTP_USER:     ${{ secrets.SMTP_USER }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASS:     ${{ secrets.SMTP_PASS }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-
-          MAX_BOARDDOCS_FILES: "50"
-          MIN_YEAR: "2021"
-          DOC_DELAY_SECONDS: "2.0"
-          REQUEST_TIMEOUT: "60"
-        run: |
-          python scripts/scraper.py
-
-      - name: Inspect workspace for outputs
-        if: always()
-        run: |
-          echo "PWD: $(pwd)"
-          echo "----- find outputs (maxdepth=3) -----"
-          find . -maxdepth 3 -type f \( -name 'last_report.html' -o -name 'report.csv' -o -name 'scanned.csv' -o -name 'to_send.eml' -o -name 'sent_report.eml' \) -printf "%p\t%k KB\n" | sort || true
-          echo "----- .debug (if present) -----"
-          ls -la .debug || true
-
-      - name: Upload report artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: last_report
-          path: |
-            **/last_report.html
-            **/report.csv
-            **/scanned.csv
-            **/to_send.eml
-            **/sent_report.eml
-            **/.debug/**
-          if-no-files-found: ignore
-          retention-days: 7
