@@ -59,7 +59,7 @@ jobs:
             echo "::group::HTML entity matches (non-comment lines)"
             grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
             echo "::endgroup::"
-            echo "::error ::Found HTML entities (<, >, &) encoded as &lt; &gt; &amp; in .github/workflows. Paste YAML as plain text."
+            echo "::error ::Found HTML entities (<, >, &) encoded as < > & in .github/workflows. Paste YAML as plain text."
             rm -f "$tmp"
             exit 1
           fi
@@ -86,8 +86,8 @@ jobs:
       # Guard: HTML-encoded arrows inside Python sources
       - name: Guard - HTML-encoded arrows in Python files
         run: |
-          if grep -RIn --include="*.py" -- "-&gt;" scripts; then
-            echo "::error ::Found HTML-encoded arrow '-&gt;' in python files. Replace with '->'"
+          if grep -RIn --include="*.py" -- "->" scripts; then
+            echo "::error ::Found HTML-encoded arrow '->' in python files. Replace with '->'"
             exit 1
           fi
 
