@@ -45,3 +45,148 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Guard: build patterns at runtime so we don't embed &lt; &gt; &amp; in this YAML
+      - name: Guard - workflows must not contain HTML entities
+        run: |
+          set -e
+          a='&'; b='lt;';  pat_lt="${a}${b}"
+          b='gt;';         pat_gt="${a}${b}"
+          b='amp;';        pat_amp="${a}${b}"
+          tmp="$(mktemp)"
+          (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
+          if grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" >/dev/null 2>&1; then
+            echo "::group::HTML entity matches (non-comment lines)"
+            grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
+            echo "::endgroup::"
+            echo "::error ::Found HTML entities (&lt;, &gt;, &amp;) in .github/workflows (non-comment lines). Paste YAML as plain text."
+            rm -f "$tmp"
+            exit 1
+          fi
+          rm -f "$tmp"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      # Guard: backticks in Python sources
+      - name: Guard - stray Markdown backticks in Python files
+        run: |
+          if grep -RIn --include="*.py" -E '```|^`$' scripts; then
+            echo "::error ::Markdown code fences/backticks found inside scripts/*.py"
+            exit 1
+          fi
+
+      # Guard: HTML-encoded arrows in Python sources (pattern built at runtime)
+      - name: Guard - HTML-encoded arrows in Python files
+        run: |
+          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"   # "-&gt;"
+          if grep -RIn --include="*.py" -F "${pat}" scripts; then
+            echo "::error ::Found HTML-encoded arrow '-&gt;' in python files. Replace with '->'"
+            exit 1
+          fi
+
+      - name: Python syntax check
+        run: |
+          python - <<'PY'
+          import py_compile, glob
+          for f in sorted(glob.glob("scripts/*.py")):
+              py_compile.compile(f, doraise=True)
+              print("OK", f)
+          PY
+
+      - name: SMTP quick test
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: |
+          python - <<'PY'
+          import os, smtplib, ssl, sys
+          host=os.getenv("SMTP_HOST")
+          port=int(os.getenv("SMTP_PORT") or 587)
+          user=os.getenv("SMTP_USER") or os.getenv("SMTP_USERNAME")
+          pwd=os.getenv("SMTP_PASS") or os.getenv("SMTP_PASSWORD")
+          if not all([host,user,pwd]):
+              print("Missing SMTP credentials."); sys.exit(1)
+          try:
+              if port == 465:
+                  with smtplib.SMTP_SSL(host, port, timeout=20) as s:
+                      s.login(user, pwd)
+              else:
+                  with smtplib.SMTP(host, port, timeout=20) as s:
+                      s.starttls(context=ssl.create_default_context())
+                      s.login(user, pwd)
+              print("SMTP login ok.")
+          except Exception as e:
+              print("SMTP login failed:", e); sys.exit(1)
+          PY
+
+      - name: Send test email (optional)
+        if: ${{ github.event.inputs.send_test == 'true' }}
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO:   ${{ secrets.REPORT_TO }}
+        run: |
+          echo "<html><body>Test email OK</body></html>" > test.html
+          python scripts/send_email.py --subject "Delran TEST" --html-body test.html
+
+      - name: Run scraper
+        env:
+          # Report & mail settings
+          REPORT_TO:   ${{ secrets.REPORT_TO }}
+          REPORT_FROM: ${{ secrets.REPORT_FROM }}
+          MAIL_FROM:   ${{ secrets.MAIL_FROM }}
+
+          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:   ${{ secrets.SMTP_USER }}
+          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+
+          # Scraper settings
+          MIN_YEAR: "2021"
+          REQUEST_TIMEOUT: "60"
+
+          # Inputs wired to env expected by the scraper
+          FORCE_FULL_RESCAN: ${{ github.event.inputs.force_full_rescan == 'true' && '1' || '0' }}
+          DEBUG_SAVE_HTML:   ${{ github.event.inputs.debug_save_html == 'true' && '1' || '0' }}
+          YEAR:              ${{ github.event.inputs.year }}
+          MAX_BOARDDOCS_FILES: ${{ github.event.inputs.max_boarddocs_files }}
+          DOC_DELAY_SECONDS:   ${{ github.event.inputs.doc_delay_seconds }}
+        run: |
+          python scripts/scraper.py
+
+      - name: Inspect outputs
+        if: always()
+        run: |
+          echo "Files:"
+          find . -maxdepth 3 -type f -print
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report_bundle
+          path: |
+            **/last_report.html
+            **/report.csv
+            **/scanned.csv
+            **/to_send.eml
+            **/sent_report.eml
+            **/.debug/**
+          if-no-files-found: ignore
+          retention-days: 7
