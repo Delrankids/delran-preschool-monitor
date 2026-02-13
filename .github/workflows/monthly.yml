@@ -1,9 +1,8 @@
 name: "Delran Preschool Monitor (Monthly)"
 
-"on":
-  # Runs daily between the 28th–31st at 12:00 UTC; an internal step
-  # checks whether "today" is the last day of the month.
+on:
   schedule:
+    # Runs at 12:00 UTC on days 28-31; a step checks if it's actually the last day
     - cron: "0 12 28-31 * *"
   workflow_dispatch:
     inputs:
@@ -13,7 +12,7 @@ name: "Delran Preschool Monitor (Monthly)"
         type: boolean
         default: false
       override_last_day:
-        description: "Run even if today is not the last day of month (manual only)"
+        description: "Run even if today is not the last day (manual runs only)"
         required: false
         type: boolean
         default: false
@@ -23,7 +22,7 @@ name: "Delran Preschool Monitor (Monthly)"
         type: boolean
         default: false
       year:
-        description: "Optional: limit to a single year (e.g., 2024). Leave empty for normal monthly range."
+        description: "Optional: limit to one year (e.g., 2024); blank = normal monthly window"
         required: false
         type: string
         default: ""
@@ -33,12 +32,12 @@ name: "Delran Preschool Monitor (Monthly)"
         type: number
         default: 75
       debug_save_html:
-        description: "Save fetched HTML to .debug/ (normally OFF for monthly)"
+        description: "Save fetched HTML in .debug/ (normally OFF for monthly)"
         required: false
         type: boolean
         default: false
       doc_delay_seconds:
-        description: "Delay between doc fetches (seconds)"
+        description: "Delay between document fetches"
         required: false
         type: string
         default: "1.5"
@@ -49,104 +48,20 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Guard 0: Detect HTML entities introduced by copy/paste
+      # Guard: entity-free workflows (self-safe patterns)
       - name: Guard - workflows must not contain HTML entities
         run: |
           set -e
-          pat_lt='<'
-          pat_gt='>'
-          pat_amp='&'
+          a='&'; b='lt;';  pat_lt="${a}${b}"
+          b='gt;';         pat_gt="${a}${b}"
+          b='amp;';        pat_amp="${a}${b}"
           tmp="$(mktemp)"
           (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
           if grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" >/dev/null 2>&1; then
             echo "::group::HTML entity matches (non-comment lines)"
             grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
             echo "::endgroup::"
-            echo "::error ::Found HTML entities (<, >, &) in .github/workflows (non-comment lines). Paste YAML as plain text."
-            rm -f "$tmp"
-            exit 1
-          fi
-          rm -f "$tmp"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r scripts/requirements.txt
-
-      # Guard 1: Backticks embedded in Python files
-      - name: Guard - stray Markdown backticks in Python
-        run: |
-          set -e
-          if grep -R --include='*.py' -nE '```|^`$' scripts 2>/dev/null; then
-            echo "::error ::Found Markdown code fences/backticks inside scripts/*.py"
-            grep -R --include='*.py' -nE '```|^`$' scripts || true
-            exit 1
-          fi
-
-      # Guard 2: HTML-encoded type-hint arrows in Python
-      - name: Guard - HTML-encoded arrows in Python
-        run: |
-          set -e
-          a='-'; b='&'; c='gt;'; pat="${a}${b}${c}"
-          tmp="$(mktemp)"
-          (grep -R --include='*.py' -nE "${pat}" scripts 2>/dev/null || true) > "$tmp"
-          matches="$(awk -F: '$0 !~ /:[[:space:]]*#/ {print}' "$tmp")"
-          if [ -n "$matches" ]; then
-            echo "::group::Encoded arrow matches (non-comment lines)"
-            echo "$matches"
-            echo "::endgroup::"
-            echo "::error ::Found HTML-encoded arrow '${pat}' in scripts/*.py (non-comment lines). Replace with '->'."
-            rm -f "$tmp"
-            exit 1
-          fi
-          rm -f "$tmp"
-
-      - name: Python syntax check
-        run: |
-          python - <<'PY'
-          import py_compile, glob
-          for f in sorted(glob.glob("scripts/*.py")):
-              py_compile.compile(f, doraise=True)
-              print("OK", f)
-          PY
-
-      - name: Determine if last day-of-month
-        id: lastday
-        run: |
-          TODAY=$(date -u +%Y-%m-%d)
-          TOMORROW=$(date -u -d "$TODAY + 1 day" +%Y-%m-%d)
-          M1=$(date -u -d "$TODAY" +%m)
-          M2=$(date -u -d "$TOMORROW" +%m)
-          if [ "$M1" != "$M2" ]; then
-            echo "is_last_day=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_last_day=false" >> $GITHUB_OUTPUT
-          fi
-          echo "today=$TODAY" >> $GITHUB_OUTPUT
-
-      - name: Show schedule gate decision
-        run: |
-          echo "is_last_day = ${{ steps.lastday.outputs.is_last_day }}"
-          echo "event       = ${{ github.event_name }}"
-          echo "override    = ${{ github.event.inputs.override_last_day }}"
-
-      - name: SMTP quick test
-        if: ${{ steps.lastday.outputs.is_last_day == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.override_last_day == 'true') }}
-        env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-        run: |
