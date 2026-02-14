@@ -87,9 +87,9 @@ jobs:
       # Guard: HTML-encoded arrows in Python sources (pattern built at runtime)
       - name: Guard - HTML-encoded arrows in Python files
         run: |
-          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "-&gt;"
+          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "-→ >"
           if grep -RIn --include="*.py" -F "${pat}" scripts; then
-            echo "::error ::Found HTML-encoded arrow '-&gt;' in python files. Replace with '->'"
+            echo "::error ::Found HTML-encoded arrow '-→ >' in python files. Replace with '->'"
             exit 1
           fi
 
