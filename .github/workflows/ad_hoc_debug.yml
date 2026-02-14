@@ -52,26 +52,14 @@ jobs:
           a='&'; b='lt;';  pat_lt="${a}${b}"
           b='gt;';         pat_gt="${a}${b}"
           b='amp;';        pat_amp="${a}${b}"
-
-          echo "::group::List .github/workflows files"
-          ls -la .github/workflows || true
-          echo "::endgroup::"
-
           tmp="$(mktemp)"
-          # Strip comment-only lines so we only scan effective content
           (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
-
-          # >>> DIAGNOSTIC: show EXACT matches the runner sees
-          echo "::group::Raw grep output (if any)"
-          grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
-          echo "::endgroup::"
-
-          # Optional: show first 160 non-comment lines
-          echo "::group::First 160 non-comment lines (normalized)"
-          nl -ba "$tmp" | sed -n '1,160p'
-          echo "::endgroup::"
-
+          # Optional debug: uncomment to see exact matches on the runner
+          # echo "::group::Raw grep output (if any)"; grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true; echo "::endgroup::"
           if grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" >/dev/null 2>&1; then
+            echo "::group::HTML entity matches (non-comment lines)"
+            grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
+            echo "::endgroup::"
             echo "::error ::Found HTML entities (<, >, &) in .github/workflows (non-comment lines). Paste YAML as plain text."
             rm -f "$tmp"
             exit 1
@@ -96,12 +84,12 @@ jobs:
             exit 1
           fi
 
-      # Guard: HTML-encoded arrows in Python sources (build pattern at runtime; avoid &gt; in YAML)
+      # Guard: HTML-encoded arrows in Python sources (pattern built at runtime)
       - name: Guard - HTML-encoded arrows in Python files
         run: |
-          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"          # encoded arrow pattern "-&gt;"
+          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "-&gt;"
           if grep -RIn --include="*.py" -F "${pat}" scripts; then
-            echo "::error ::Found HTML-encoded arrow '${x}${y}${z}' in python files. Replace with '->'"
+            echo "::error ::Found HTML-encoded arrow '-&gt;' in python files. Replace with '->'"
             exit 1
           fi
 
@@ -159,17 +147,23 @@ jobs:
 
       - name: Run scraper
         env:
+          # Report & mail settings
           REPORT_TO:   ${{ secrets.REPORT_TO }}
           REPORT_FROM: ${{ secrets.REPORT_FROM }}
           MAIL_FROM:   ${{ secrets.MAIL_FROM }}
+
           SMTP_HOST:   ${{ secrets.SMTP_HOST }}
           SMTP_PORT:   ${{ secrets.SMTP_PORT }}
           SMTP_USER:   ${{ secrets.SMTP_USER }}
           SMTP_PASS:   ${{ secrets.SMTP_PASS }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+
+          # Scraper settings
           MIN_YEAR: "2021"
           REQUEST_TIMEOUT: "60"
+
+          # Inputs wired to env expected by the scraper
           FORCE_FULL_RESCAN: ${{ github.event.inputs.force_full_rescan == 'true' && '1' || '0' }}
           DEBUG_SAVE_HTML:   ${{ github.event.inputs.debug_save_html == 'true' && '1' || '0' }}
           YEAR:              ${{ github.event.inputs.year }}
