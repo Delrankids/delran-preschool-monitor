@@ -52,14 +52,26 @@ jobs:
           a='&'; b='lt;';  pat_lt="${a}${b}"
           b='gt;';         pat_gt="${a}${b}"
           b='amp;';        pat_amp="${a}${b}"
+
+          echo "::group::List .github/workflows files"
+          ls -la .github/workflows || true
+          echo "::endgroup::"
+
           tmp="$(mktemp)"
+          # Strip comment-only lines so we only scan effective content
           (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
-          # Debug (optional): uncomment to see exact matches
-          # echo "::group::Raw grep output (if any)"; grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true; echo "::endgroup::"
+
+          # >>> DIAGNOSTIC: show EXACT matches the runner sees
+          echo "::group::Raw grep output (if any)"
+          grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
+          echo "::endgroup::"
+
+          # Optional: show first 160 lines of the normalized file
+          echo "::group::First 160 non-comment lines (normalized)"
+          nl -ba "$tmp" | sed -n '1,160p'
+          echo "::endgroup::"
+
           if grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" >/dev/null 2>&1; then
-            echo "::group::HTML entity matches (non-comment lines)"
-            grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
-            echo "::endgroup::"
             echo "::error ::Found HTML entities (<, >, &) in .github/workflows (non-comment lines). Paste YAML as plain text."
             rm -f "$tmp"
             exit 1
@@ -87,9 +99,9 @@ jobs:
       # Guard: HTML-encoded arrows in Python sources (pattern built at runtime)
       - name: Guard - HTML-encoded arrows in Python files
         run: |
-          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "-→ >"
+          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "-&gt;"
           if grep -RIn --include="*.py" -F "${pat}" scripts; then
-            echo "::error ::Found HTML-encoded arrow '-→ >' in python files. Replace with '->'"
+            echo "::error ::Found HTML-encoded arrow '-&gt;' in python files. Replace with '->'"
             exit 1
           fi
 
