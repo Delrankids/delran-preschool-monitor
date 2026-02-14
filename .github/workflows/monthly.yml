@@ -61,7 +61,37 @@ jobs:
           b='amp;';        pat_amp="${a}${b}"
           tmp="$(mktemp)"
           (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
+          # Debug (optional): uncomment to see exact matches
+          # echo "::group::Raw grep output (if any)"; grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true; echo "::endgroup::"
           if grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" >/dev/null 2>&1; then
             echo "::group::HTML entity matches (non-comment lines)"
             grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
             echo "::endgroup::"
+            echo "::error ::Found HTML entities (<, >, &) in .github/workflows (non-comment lines). Paste YAML as plain text."
+            rm -f "$tmp"
+            exit 1
+          fi
+          rm -f "$tmp"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      # Guard: backticks in Python sources
+      - name: Guard - stray Markdown backticks in Python files
+        run: |
+          if grep -RIn --include="*.py" -E '```|^`$' scripts; then
+            echo "::error ::Markdown code fences/backticks found inside scripts/*.py"
+            exit 1
+          fi
+
+      # Guard: HTML-encoded arrows in Python sources (pattern built at runtime)
+      - name: Guard - HTML-encoded arrows in Python files
+        run: |
+          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "-&gt;"
