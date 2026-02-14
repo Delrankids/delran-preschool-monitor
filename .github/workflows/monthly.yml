@@ -94,4 +94,4 @@ jobs:
       # Guard: HTML-encoded arrows in Python sources (pattern built at runtime)
       - name: Guard - HTML-encoded arrows in Python files
         run: |
-          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "-&gt;"
+          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "->"
