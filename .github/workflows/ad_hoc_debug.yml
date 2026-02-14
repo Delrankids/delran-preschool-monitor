@@ -45,7 +45,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Guard: build patterns at runtime so we don't embed &lt; &gt; &amp; in this YAML
+    # Guard: build patterns at runtime so we don't embed < > & in this YAML
       - name: Guard - workflows must not contain HTML entities
         run: |
           set -e
@@ -58,7 +58,7 @@ jobs:
             echo "::group::HTML entity matches (non-comment lines)"
             grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
             echo "::endgroup::"
-            echo "::error ::Found HTML entities (&lt;, &gt;, &amp;) in .github/workflows (non-comment lines). Paste YAML as plain text."
+           echo "::error ::Found HTML entities (<, >, &) in .github/workflows (non-comment lines). Paste YAML as plain text."
             rm -f "$tmp"
             exit 1
           fi
@@ -85,7 +85,7 @@ jobs:
       # Guard: HTML-encoded arrows in Python sources (pattern built at runtime)
       - name: Guard - HTML-encoded arrows in Python files
         run: |
-          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"   # "-&gt;"
+          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "-&gt;"
           if grep -RIn --include="*.py" -F "${pat}" scripts; then
             echo "::error ::Found HTML-encoded arrow '-&gt;' in python files. Replace with '->'"
             exit 1
