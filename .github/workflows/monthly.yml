@@ -94,9 +94,9 @@ jobs:
       # Guard: HTML-encoded arrows in Python sources (pattern built at runtime)
       - name: Guard - HTML-encoded arrows in Python files
         run: |
-          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "-&gt;"
+          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "->"
           if grep -RIn --include="*.py" -F "${pat}" scripts; then
-            echo "::error ::Found HTML-encoded arrow '-&gt;' in python files. Replace with '->'"
+            echo "::error ::Found HTML-encoded arrow '->' in python files. Replace with '->'"
             exit 1
           fi
 
@@ -130,7 +130,7 @@ jobs:
           echo "override    = ${{ github.event.inputs.override_last_day }}"
 
       - name: SMTP quick test
-        if: ${{ steps.lastday.outputs.is_last_day == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.override_last_day == 'true') }}
+        if: ${{ steps.lastday.outputs.is_last_day == 'true' || (github.event_name == 'workflow_dispatch' &&&& github.event.inputs.override_last_day == 'true') }}
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -161,7 +161,7 @@ jobs:
           PY
 
       - name: Send test email (optional)
-        if: ${{ (steps.lastday.outputs.is_last_day == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.override_last_day == 'true')) && github.event.inputs.send_test == 'true' }}
+        if: ${{ (steps.lastday.outputs.is_last_day == 'true' || (github.event_name == 'workflow_dispatch' &&&& github.event.inputs.override_last_day == 'true')) &&&& github.event.inputs.send_test == 'true' }}
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -174,7 +174,7 @@ jobs:
           python scripts/send_email.py --subject "Delran TEST" --html-body test.html
 
       - name: Run scraper (monthly window)
-        if: ${{ steps.lastday.outputs.is_last_day == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.override_last_day == 'true') }}
+        if: ${{ steps.lastday.outputs.is_last_day == 'true' || (github.event_name == 'workflow_dispatch' &&&& github.event.inputs.override_last_day == 'true') }}
         env:
           # Report & mail settings
           REPORT_TO:   ${{ secrets.REPORT_TO }}
@@ -193,8 +193,8 @@ jobs:
           REQUEST_TIMEOUT: "60"
           DOC_DELAY_SECONDS:   ${{ github.event.inputs.doc_delay_seconds || '1.5' }}
           MAX_BOARDDOCS_FILES: ${{ github.event.inputs.max_boarddocs_files || '75' }}
-          DEBUG_SAVE_HTML:     ${{ github.event.inputs.debug_save_html == 'true' && '1' || '0' }}
-          FORCE_FULL_RESCAN:   ${{ github.event.inputs.force_full_rescan == 'true' && '1' || '0' }}
+          DEBUG_SAVE_HTML:     ${{ github.event.inputs.debug_save_html == 'true' &&&& '1' || '0' }}
+          FORCE_FULL_RESCAN:   ${{ github.event.inputs.force_full_rescan == 'true' &&&& '1' || '0' }}
           YEAR:                ${{ github.event.inputs.year }}
         run: |
           python scripts/scraper.py

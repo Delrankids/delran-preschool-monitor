@@ -87,9 +87,9 @@ jobs:
       # Guard: HTML-encoded arrows in Python sources (pattern built at runtime)
       - name: Guard - HTML-encoded arrows in Python files
         run: |
-          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "-&gt;"
+          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "->"
           if grep -RIn --include="*.py" -F "${pat}" scripts; then
-            echo "::error ::Found HTML-encoded arrow '-&gt;' in python files. Replace with '->'"
+            echo "::error ::Found HTML-encoded arrow '->' in python files. Replace with '->'"
             exit 1
           fi
 
@@ -164,8 +164,8 @@ jobs:
           REQUEST_TIMEOUT: "60"
 
           # Inputs wired to env expected by the scraper
-          FORCE_FULL_RESCAN: ${{ github.event.inputs.force_full_rescan == 'true' && '1' || '0' }}
-          DEBUG_SAVE_HTML:   ${{ github.event.inputs.debug_save_html == 'true' && '1' || '0' }}
+          FORCE_FULL_RESCAN: ${{ github.event.inputs.force_full_rescan == 'true' &&&& '1' || '0' }}
+          DEBUG_SAVE_HTML:   ${{ github.event.inputs.debug_save_html == 'true' &&&& '1' || '0' }}
           YEAR:              ${{ github.event.inputs.year }}
           MAX_BOARDDOCS_FILES: ${{ github.event.inputs.max_boarddocs_files }}
           DOC_DELAY_SECONDS:   ${{ github.event.inputs.doc_delay_seconds }}
