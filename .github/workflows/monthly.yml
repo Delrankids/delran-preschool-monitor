@@ -1,8 +1,8 @@
+
 name: "Delran Preschool Monitor (Monthly)"
 
 on:
   schedule:
-    # Runs at 12:00 UTC on days 28-31; a step checks if it's actually the last day
     - cron: "0 12 28-31 * *"
   workflow_dispatch:
     inputs:
@@ -17,22 +17,22 @@ on:
         type: boolean
         default: false
       force_full_rescan:
-        description: "Force a full rescan (ignore state.json) — use sparingly"
+        description: "Force a full rescan (ignore state.json)"
         required: false
         type: boolean
         default: false
       year:
-        description: "Optional: limit to one year (e.g., 2024); blank = normal monthly window"
+        description: "Optional: limit to one year; blank = normal monthly window"
         required: false
         type: string
         default: ""
       max_boarddocs_files:
-        description: "Cap BoardDocs discovery (75 is fine for monthly)"
+        description: "Cap BoardDocs discovery (monthly)"
         required: false
         type: number
         default: 75
       debug_save_html:
-        description: "Save fetched HTML in .debug/ (normally OFF for monthly)"
+        description: "Save fetched HTML in .debug/"
         required: false
         type: boolean
         default: false
@@ -52,17 +52,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Guard: entity-free workflows (self-safe patterns)
       - name: Guard - workflows must not contain HTML entities
         run: |
           set -e
           a='&'; b='lt;';  pat_lt="${a}${b}"
-          b='gt;';         pat_gt="${a}${b}"
-          b='amp;';        pat_amp="${a}${b}"
+          b='gt;';               pat_gt="${a}${b}"
+          b='amp;';              pat_amp="${a}${b}"
           tmp="$(mktemp)"
           (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
-          # Optional debug: uncomment to see exact matches
-          # echo "::group::Raw grep output (if any)"; grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true; echo "::endgroup::"
           if grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" >/dev/null 2>&1; then
             echo "::group::HTML entity matches (non-comment lines)"
             grep -nE "${pat_lt}|${pat_gt}|${pat_amp}" "$tmp" || true
@@ -83,7 +80,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r scripts/requirements.txt
 
-      # Guard: backticks in Python sources
       - name: Guard - stray Markdown backticks in Python files
         run: |
           if grep -RIn --include="*.py" -E '```|^`$' scripts; then
@@ -91,12 +87,11 @@ jobs:
             exit 1
           fi
 
-      # Guard: HTML-encoded arrows in Python sources (pattern built at runtime)
       - name: Guard - HTML-encoded arrows in Python files
         run: |
-          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"      # "->"
+          x='-'; y='&'; z='gt;'; pat="${x}${y}${z}"
           if grep -RIn --include="*.py" -F "${pat}" scripts; then
-            echo "::error ::Found HTML-encoded arrow '->' in python files. Replace with '->'"
+            echo "::error ::Found HTML-encoded arrow '-&gt;' in python files. Replace with '->'"
             exit 1
           fi
 
@@ -117,11 +112,11 @@ jobs:
           M1=$(date -u -d "$TODAY" +%m)
           M2=$(date -u -d "$TOMORROW" +%m)
           if [ "$M1" != "$M2" ]; then
-            echo "is_last_day=true" >> $GITHUB_OUTPUT
+            echo "is_last_day=true" > $GITHUB_OUTPUT
           else
-            echo "is_last_day=false" >> $GITHUB_OUTPUT
+            echo "is_last_day=false" > $GITHUB_OUTPUT
           fi
-          echo "today=$TODAY" >> $GITHUB_OUTPUT
+          echo "today=$TODAY" > $GITHUB_OUTPUT
 
       - name: Show schedule gate decision
         run: |
@@ -176,7 +171,6 @@ jobs:
       - name: Run scraper (monthly window)
         if: ${{ steps.lastday.outputs.is_last_day == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.override_last_day == 'true') }}
         env:
-          # Report & mail settings
           REPORT_TO:   ${{ secrets.REPORT_TO }}
           REPORT_FROM: ${{ secrets.REPORT_FROM }}
           MAIL_FROM:   ${{ secrets.MAIL_FROM }}
@@ -188,7 +182,6 @@ jobs:
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
 
-          # Scraper settings (monthly defaults)
           MIN_YEAR: "2021"
           REQUEST_TIMEOUT: "60"
           DOC_DELAY_SECONDS:   ${{ github.event.inputs.doc_delay_seconds || '1.5' }}
