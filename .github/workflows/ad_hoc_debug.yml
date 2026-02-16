@@ -164,8 +164,8 @@ jobs:
           REQUEST_TIMEOUT: "60"
 
           # Inputs wired to env expected by the scraper
-          FORCE_FULL_RESCAN: ${{ github.event.inputs.force_full_rescan == 'true' &&&&&&&& '1' || '0' }}
-          DEBUG_SAVE_HTML:   ${{ github.event.inputs.debug_save_html == 'true' &&&&&&&& '1' || '0' }}
+          FORCE_FULL_RESCAN: ${{ github.event.inputs.force_full_rescan == 'true' && '1' || '0' }}
+          DEBUG_SAVE_HTML:   ${{ github.event.inputs.debug_save_html == 'true' && '1' || '0' }}
           YEAR:              ${{ github.event.inputs.year }}
           MAX_BOARDDOCS_FILES: ${{ github.event.inputs.max_boarddocs_files }}
           DOC_DELAY_SECONDS:   ${{ github.event.inputs.doc_delay_seconds }}
