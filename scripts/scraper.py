@@ -273,4 +273,4 @@ def crawl_boarddocs(root_url: str, max_files: int) -> List[Dict[str, str]]:
 
 def get_minutes_links() -> List[Dict[str, str]]:
     start_urls = [BASE_URL, BOE_URL]
-    return crawl_district(
+    return crawl_district()
