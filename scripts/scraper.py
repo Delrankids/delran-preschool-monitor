@@ -1,17 +1,19 @@
 # In collect_links_from_html(page_url: str, html_text: str) -> List[Dict[str, str]]:
 # ... existing code ...
 
-    # Special handling for Delran minutes table (SharpSchool style)
-        for row in soup.find_all('tr'):  # Look for table rows
-        cells = row.find_all('td')
-        if len(cells) >= 2:  # File Name + Size columns
+# Special handling for Delran minutes table (SharpSchool style)
+    for row in soup.find_all('tr'):  # ← 4 spaces indent (matches function body)
+        cells = row.find_all(['td', 'th'])
+        if len(cells) >= 2:
             link_tag = cells[0].find('a', href=True)
             if link_tag:
-                href = link_tag['href']
+                href = link_tag.get('href', '')
                 full_url = urljoin(page_url, href)
                 title = link_tag.get_text(strip=True)
-                if full_url.lower().endswith(('.pdf', '.doc', '.docx')) or 'DisplayFile.aspx' in full_url or 'GetFile.ashx' in full_url:
-                    items.append({"title": title or "Meeting Minutes", "url": full_url, "source": "district"})
+                if any(ext in full_url.lower() for ext in ['.pdf', '.doc', '.docx', 'getfile.ashx', 'displayfile.aspx']):
+                    if full_url not in seen:
+                        seen.add(full_url)
+                        items.append({"title": title or "Meeting Minutes", "url": full_url, "source": "district"})
 
 # In crawl_district(...):
 # ... existing queue/visited ...
@@ -37,3 +39,4 @@
                     and any(kw in nxt.lower() for kw in ['minutes', 'boe', 'board', 'meeting', 'agenda'])):
 
                     queue.append((nxt, depth + 1))
+
