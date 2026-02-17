@@ -18,7 +18,7 @@ import json
 import time
 import hashlib
 import logging
-from typing import List, Dict, Optional, Tuple, Set
+from typing import List, Dict, Optional, Tuple, Iterable, Set
 from urllib.parse import urljoin, urlparse
 from datetime import datetime
 
@@ -482,3 +482,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
