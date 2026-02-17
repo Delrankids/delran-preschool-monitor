@@ -130,13 +130,13 @@ BOARD_DOCS_JSON_NAME_RE = re.compile(r'"fileName"\s*:\s*"([^"]+?)"', re.IGNORECA
 
 def collect_links_from_html(page_url: str, html_text: str) -> List[Dict[str, str]]:
     """
-    Collect document links from HTML page, including special handling for Delran's minutes list.
+    Collect ALL potential document links, with strong focus on Delran minutes.
     """
     soup = BeautifulSoup(html_text, "lxml")
     items: List[Dict[str, str]] = []
     seen: Set[str] = set()
 
-    # General link collection (BoardDocs patterns, DisplayFile, extensions)
+    # Catch BoardDocs patterns first (existing)
     for a in soup.find_all("a", href=True):
         href = a.get("href") or ""
         full = urljoin(page_url, href)
@@ -148,15 +148,20 @@ def collect_links_from_html(page_url: str, html_text: str) -> List[Dict[str, str
                 items.append({"title": title or "BoardDocs Attachment", "url": full, "source": "boarddocs"})
             continue
 
-        if ("DisplayFile.aspx" in full) or full.lower().endswith(DOC_EXTS):
-            if full not in seen:
-                seen.add(full)
-                src = "district"
-                if "cdnsm" in domain_of(full) or "sharpschool" in domain_of(full):
-                    src = "district-cdn"
-                items.append({"title": title, "url": full, "source": src})
+        # Catch SharpSchool/Delran file handlers and common doc patterns
+        lower_full = full.lower()
+        if any(term in lower_full for term in ['getfile.ashx', 'displayfile.aspx', 'boe', 'minutes', 'agenda', 'board minutes', 're-organization']):
+            if any(ext in lower_full for ext in ['.pdf', '.doc', '.docx']) or 'getfile.ashx' in lower_full:
+                if full not in seen:
+                    seen.add(full)
+                    items.append({
+                        "title": title or "Delran Meeting Document",
+                        "url": full,
+                        "source": "district"
+                    })
+                    logging.info(f"FOUND DELRAN DOCUMENT: {full} ({title})")
 
-    # Embedded BoardDocs JSON in <script> tags
+    # Also catch any script-embedded BoardDocs JSON (keep your original)
     for script in soup.find_all("script"):
         s = script.string or script.get_text() or ""
         if not s:
@@ -169,42 +174,7 @@ def collect_links_from_html(page_url: str, html_text: str) -> List[Dict[str, str
                 fname = name_match.group(1) if name_match else "BoardDocs Attachment"
                 items.append({"title": fname, "url": file_url, "source": "boarddocs"})
 
-    # Delran-specific: SharpSchool minutes list (ul.file-list or table fallback)
-    for li in soup.select('ul.file-list li, .file-list li'):
-        link_tag = li.find('a', href=True)
-        if link_tag:
-            href = link_tag.get('href', '')
-            full_url = urljoin(page_url, href)
-            title = link_tag.get_text(strip=True)
-            if any(ext in full_url.lower() for ext in ['.pdf', '.doc', '.docx', 'getfile.ashx', 'displayfile.aspx']):
-                if full_url not in seen:
-                    seen.add(full_url)
-                    items.append({
-                        "title": title or "Meeting Minutes",
-                        "url": full_url,
-                        "source": "district"
-                    })
-                    logging.info(f"Found Delran minutes link (file-list): {full_url} ({title})")
-
-    # Fallback for table rows if site uses <tr>
-    for row in soup.find_all('tr'):
-        cells = row.find_all(['td', 'th'])
-        if len(cells) >= 2:
-            link_tag = cells[0].find('a', href=True)
-            if link_tag:
-                href = link_tag.get('href', '')
-                full_url = urljoin(page_url, href)
-                title = link_tag.get_text(strip=True)
-                if any(ext in full_url.lower() for ext in ['.pdf', '.doc', '.docx', 'getfile.ashx', 'displayfile.aspx']):
-                    if full_url not in seen:
-                        seen.add(full_url)
-                        items.append({
-                            "title": title or "Meeting Minutes",
-                            "url": full_url,
-                            "source": "district"
-                        })
-                        logging.info(f"Found Delran minutes link (table): {full_url} ({title})")
-
+    logging.info(f"Collected {len(items)} links from {page_url}")
     return items
 
 def crawl_district(start_urls: Iterable[str], allowed_domains: Set[str],
@@ -482,4 +452,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
