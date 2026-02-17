@@ -2,7 +2,7 @@
 # ... existing code ...
 
     # Special handling for Delran minutes table (SharpSchool style)
-    for row in soup.find_all('tr'):  # Look for table rows
+        for row in soup.find_all('tr'):  # Look for table rows
         cells = row.find_all('td')
         if len(cells) >= 2:  # File Name + Size columns
             link_tag = cells[0].find('a', href=True)
@@ -35,4 +35,5 @@
                 if (nxt not in visited
                     and is_allowed_domain(nxt, allowed_domains)
                     and any(kw in nxt.lower() for kw in ['minutes', 'boe', 'board', 'meeting', 'agenda'])):
+
                     queue.append((nxt, depth + 1))
