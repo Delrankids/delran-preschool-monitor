@@ -130,51 +130,30 @@ BOARD_DOCS_JSON_NAME_RE = re.compile(r'"fileName"\s*:\s*"([^"]+?)"', re.IGNORECA
 
 def collect_links_from_html(page_url: str, html_text: str) -> List[Dict[str, str]]:
     """
-    Collect ALL potential document links, with strong focus on Delran minutes.
+    TEMP TEST VERSION: Collect EVERY <a> link to see if fetch is working.
     """
     soup = BeautifulSoup(html_text, "lxml")
     items: List[Dict[str, str]] = []
     seen: Set[str] = set()
 
-    # Catch BoardDocs patterns first (existing)
+    logging.info(f"Collecting ALL links from {page_url} for debug")
+
     for a in soup.find_all("a", href=True):
         href = a.get("href") or ""
-        full = urljoin(page_url, href)
-        title = a.get_text(strip=True) or full
+        full_url = urljoin(page_url, href)
+        title = a.get_text(strip=True) or full_url
 
-        if BOARD_DOCS_FILE_RE.search(full):
-            if full not in seen:
-                seen.add(full)
-                items.append({"title": title or "BoardDocs Attachment", "url": full, "source": "boarddocs"})
-            continue
+        # Add EVERY link (no filtering) to see what's there
+        if full_url not in seen:
+            seen.add(full_url)
+            items.append({
+                "title": title,
+                "url": full_url,
+                "source": "debug_all"
+            })
+            logging.info(f"DEBUG LINK: {full_url} ({title})")
 
-        # Catch SharpSchool/Delran file handlers and common doc patterns
-        lower_full = full.lower()
-        if any(term in lower_full for term in ['getfile.ashx', 'displayfile.aspx', 'boe', 'minutes', 'agenda', 'board minutes', 're-organization']):
-            if any(ext in lower_full for ext in ['.pdf', '.doc', '.docx']) or 'getfile.ashx' in lower_full:
-                if full not in seen:
-                    seen.add(full)
-                    items.append({
-                        "title": title or "Delran Meeting Document",
-                        "url": full,
-                        "source": "district"
-                    })
-                    logging.info(f"FOUND DELRAN DOCUMENT: {full} ({title})")
-
-    # Also catch any script-embedded BoardDocs JSON (keep your original)
-    for script in soup.find_all("script"):
-        s = script.string or script.get_text() or ""
-        if not s:
-            continue
-        for m_url in BOARD_DOCS_JSON_URL_RE.finditer(s):
-            file_url = urljoin(page_url, m_url.group(1))
-            if file_url not in seen:
-                seen.add(file_url)
-                name_match = BOARD_DOCS_JSON_NAME_RE.search(s)
-                fname = name_match.group(1) if name_match else "BoardDocs Attachment"
-                items.append({"title": fname, "url": file_url, "source": "boarddocs"})
-
-    logging.info(f"Collected {len(items)} links from {page_url}")
+    logging.info(f"Collected {len(items)} raw links from {page_url}")
     return items
 
 def crawl_district(start_urls: Iterable[str], allowed_domains: Set[str],
@@ -452,5 +431,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
