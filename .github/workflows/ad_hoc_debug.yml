@@ -48,9 +48,9 @@ jobs:
       - name: Guard - workflows must not contain HTML entities
         run: |
           set -e
-          a='&'; b='lt;';  pat_lt="${a}${b}"
-          b='gt;';         pat_gt="${a}${b}"
-          b='amp;';        pat_amp="${a}${b}"
+          a='&'; b='lt;'; pat_lt="${a}${b}"
+          b='gt;'; pat_gt="${a}${b}"
+          b='amp;'; pat_amp="${a}${b}"
           tmp="$(mktemp)"
           (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
           echo "::group::HTML entity matches (non-comment lines)"
@@ -69,11 +69,11 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-       run: |
-         python -m pip install --upgrade pip
-         pip install -r scripts/requirements.txt
-         pip install playwright
-         playwright install --with-deps chromium
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+          pip install playwright
+          playwright install --with-deps chromium
 
       - name: Guard - stray Markdown backticks in Python files
         run: |
@@ -186,4 +186,3 @@ jobs:
             **/.debug/**
           if-no-files-found: ignore
           retention-days: 7
-
