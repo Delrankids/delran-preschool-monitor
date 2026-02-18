@@ -48,9 +48,9 @@ jobs:
       - name: Guard - workflows must not contain HTML entities
         run: |
           set -e
-          a='&'; b='lt;'; pat_lt="${a}${b}"
-          b='gt;'; pat_gt="${a}${b}"
-          b='amp;'; pat_amp="${a}${b}"
+          a='&'; b='lt;';  pat_lt="${a}${b}"
+          b='gt;';         pat_gt="${a}${b}"
+          b='amp;';        pat_amp="${a}${b}"
           tmp="$(mktemp)"
           (cat .github/workflows/*.yml 2>/dev/null || true) | awk '!/^[[:space:]]*#/' > "$tmp"
           echo "::group::HTML entity matches (non-comment lines)"
