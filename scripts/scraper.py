@@ -403,4 +403,15 @@ def process_document(link: Dict[str, str], state: Dict) -> Optional[Dict]:
 # ---------------------------- Reporting ------------------------------
 
 def write_report_csv(results: List[Dict]) -> None:
-    with open("report.csv", "w", newline="",
+    with open("report.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["url", "title", "date", "keyword", "snippet"])
+        writer.writeheader()
+        for r in results:
+            for m in r.get("mentions", []):
+                writer.writerow({
+                    "url": r["url"],
+                    "title": r["title"],
+                    "date": r["date"],
+                    "keyword": m["keyword"],
+                    "snippet": m["snippet"]
+                })
