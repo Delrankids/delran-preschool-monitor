@@ -99,6 +99,10 @@ def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
                     logging.info(f"Playwright response status: {response.status}")
                 page.wait_for_timeout(8000)
                 html = page.content()
+                logging.info(f"First 500 chars of HTML: {html[:500]}")
+                logging.info(f"Does HTML contain 'GetFile.ashx'? {'getfile.ashx' in html.lower()}")
+                logging.info(f"Does HTML contain 'Minutes'? {'minutes' in html.lower()}")
+                logging.info(f"Number of <a> tags: {len(soup.find_all('a'))}")
                 browser.close()
                 logging.info(f"Stealth Playwright fetch success: {len(html)} bytes")
                 class FakeResponse:
@@ -206,5 +210,6 @@ def collect_links_from_html(page_url: str, html_text: str) -> List[Dict[str, str
 # ... (keep the rest of the file unchanged: crawl_district, crawl_boarddocs, get_minutes_links, load_state, save_state, process_document, write_report_csv, write_scanned_csv, main)
 
 # (Paste the rest from your previous version - I omitted it to save space, but keep crawl_district, crawl_boarddocs, etc. as they are in your last successful version)
+
 
 
