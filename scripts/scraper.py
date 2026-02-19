@@ -14,7 +14,7 @@ import requests
 from bs4 import BeautifulSoup
 import html as _html
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
+from playwright_stealth import stealth
 
 from parser_utils import extract_text_from_pdf, extract_text_from_docx, find_preschool_mentions, guess_meeting_date, KEYWORD_REGEX
 from email_utils import render_html_report, send_email
@@ -71,9 +71,6 @@ def sha1_of(*parts: str) -> str:
         h.update((p or "").encode("utf-8", "ignore"))
     return h.hexdigest()
 
-def ensure_debug_dir() -> None:
-    os.makedirs(".debug", exist_ok=True)
-
 def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
     logging.info(f"Starting fetch for {url}")
     if "delranschools.org" in url.lower():
@@ -91,7 +88,7 @@ def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
                     java_script_enabled=True,
                 )
                 page = context.new_page()
-                stealth(page)  # Correct stealth call
+                stealth(page)  # Correct call
                 page.set_extra_http_headers(HEADERS)
                 if referer:
                     page.set_extra_http_headers({"Referer": referer})
@@ -209,4 +206,5 @@ def collect_links_from_html(page_url: str, html_text: str) -> List[Dict[str, str
 # ... (keep the rest of the file unchanged: crawl_district, crawl_boarddocs, get_minutes_links, load_state, save_state, process_document, write_report_csv, write_scanned_csv, main)
 
 # (Paste the rest from your previous version - I omitted it to save space, but keep crawl_district, crawl_boarddocs, etc. as they are in your last successful version)
+
 
