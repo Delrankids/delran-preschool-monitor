@@ -87,22 +87,26 @@ def sha1_of(*parts: str) -> str:
 def ensure_debug_dir() -> None:
     os.makedirs(".debug", exist_ok=True)
 
+from playwright_stealth import stealth_sync
+
 def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
     logging.info(f"Starting fetch for {url}")
     if "delranschools.org" in url.lower():
-        logging.info("Using Playwright for Delran page")
+        logging.info("Using stealth Playwright for Delran page")
         try:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 context = browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    viewport={"width": 1280, "height": 800},
+                    viewport={"width": 1920, "height": 1080},
                     locale="en-US",
                     timezone_id="America/New_York",
                     bypass_csp=True,
                     ignore_https_errors=True,
+                    java_script_enabled=True,
                 )
                 page = context.new_page()
+                stealth_sync(page)  # Apply stealth to avoid detection
                 page.set_extra_http_headers(HEADERS)
                 if referer:
                     page.set_extra_http_headers({"Referer": referer})
@@ -111,22 +115,21 @@ def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
                     logging.warning("No response from goto")
                 else:
                     logging.info(f"Playwright response status: {response.status}")
-                # Wait extra time for Cloudflare or JS to settle
-                page.wait_for_timeout(5000)  # 5 seconds extra
+                page.wait_for_timeout(8000)  # Extra wait for JS/Cloudflare
                 html = page.content()
                 browser.close()
-                logging.info(f"Playwright fetch success: {len(html)} bytes")
+                logging.info(f"Stealth Playwright fetch success: {len(html)} bytes")
                 class FakeResponse:
                     def __init__(self, text):
                         self.text = text
                         self.content = text.encode('utf-8')
-                        self.status_code = 200 if len(text) > 1000 else 403
+                        self.status_code = 200 if len(text) > 5000 else 403
                     def raise_for_status(self):
                         if self.status_code != 200:
                             raise requests.exceptions.HTTPError(f"Status {self.status_code}")
                 return FakeResponse(html)
         except Exception as e:
-            logging.error(f"Playwright fetch failed: {str(e)}")
+            logging.error(f"Stealth Playwright fetch failed: {str(e)}")
             raise
     else:
         headers = dict(HEADERS)
@@ -432,4 +435,5 @@ def write_report_csv(results: List[Dict]) -> None:
                     "keyword": m["keyword"],
                     "snippet": m["snippet"]
                 })
+
 
