@@ -184,5 +184,6 @@ jobs:
             **/to_send.eml
             **/sent_report.eml
             **/.debug/**
-          if-no-files-found: ignore
+          if-no-files-found: warn  # Changed from ignore to warn
           retention-days: 7
+
