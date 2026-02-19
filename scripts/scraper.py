@@ -234,4 +234,63 @@ def collect_links_from_html(page_url: str, html_text: str) -> List[Dict[str, str
     return items
 
 def crawl_district(start_urls: Iterable[str], allowed_domains: Set[str],
+                   max_pages: int, max_depth: int) -> List[Dict[str, str]]:
+    queue: List[Tuple[str, int]] = [(u, 0) for u in start_urls]
+    visited: Set[str] = set()
+    results: List[Dict[str, str]] = []
+
+    while queue and len(visited) < max_pages:
+        url, depth = queue.pop(0)
+        if url in visited:
+            continue
+        visited.add(url)
+
+        if not is_allowed_domain(url, allowed_domains):
+            continue
+
+        try:
+            resp = fetch(url)
+        except Exception as e:
+            logging.warning("District fetch failed %s: %s", url, e)
+            continue
+
+        save_debug_html(f"district_{len(visited):03d}.html", resp.content)
+
+        results.extend(collect_links_from_html(url, resp.text))
+
+        if depth < max_depth:
+            soup = BeautifulSoup(resp.text, "lxml")
+
+            # Pagination detection
+            pagination_patterns = re.compile(r'(next|>|»|more|\.{3}|page\s*\d+|pg=|p=)', re.IGNORECASE)
+            next_links = (
+                soup.find_all('a', string=pagination_patterns) +
+                soup.find_all('a', href=re.compile(r'(page|pg|p)=', re.IGNORECASE))
+            )
+
+            for a in next_links:
+                h = a.get('href') or ''
+                nxt = urljoin(url, h)
+                if nxt not in visited and is_allowed_domain(nxt, allowed_domains) and nxt != url:
+                    queue.append((nxt, depth + 1))
+                    logging.info(f"Queued pagination link: {nxt}")
+
+            # Follow promising links
+            for a in soup.find_all("a", href=True):
+                h = a.get("href") or ""
+                nxt = urljoin(url, h)
+                if (nxt not in visited and
+                    is_allowed_domain(nxt, allowed_domains) and
+                    any(kw in nxt.lower() for kw in ['minutes', 'boe', 'board', 'meeting', 'agenda', 'getfile', 'displayfile'])):
+                    queue.append((nxt, depth + 1))
+                    logging.info(f"Queued related minutes link: {nxt}")
+
+    out, seen = [], set()
+    for it in results:
+        if it["url"] not in seen:
+            seen.add(it["url"])
+            out.append(it)
+    logging.info("District links discovered: %d (pages crawled=%d)", len(out), len(visited))
+    return out
+
 
