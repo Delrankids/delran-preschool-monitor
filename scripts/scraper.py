@@ -102,9 +102,9 @@ def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
                 logging.info(f"Playwright HTML length: {len(html)} bytes")
                 logging.info(f"Contains 'GetFile.ashx': {'getfile.ashx' in html.lower()}")
                 logging.info(f"Contains 'Minutes': {'minutes' in html.lower()}")
-                logging.info(f"Contains 'Cloudflare' or 'checking your browser' or 'verify': {'cloudflare' in html.lower() or 'checking your browser' in html.lower() or 'verify' in html.lower()}")
+                logging.info(f"Contains 'Cloudflare' or 'checking your browser': {'cloudflare' in html.lower() or 'checking your browser' in html.lower()}")
                 logging.info(f"Page title: {soup.title.string if soup.title else 'No title'}")
-                logging.info(f"First 300 chars of HTML (cleaned): {html[:300].replace('\n', ' ').replace('\r', ' ')}")
+                logging.info(f"First 300 chars (cleaned): {html[:300].replace('\n', ' ').replace('\r', ' ')}")
                 logging.info(f"Playwright HTML length: {len(html)} bytes")
                 logging.info(f"Contains 'GetFile.ashx': {'getfile.ashx' in html.lower()}")
                 logging.info(f"Contains 'Minutes': {'minutes' in html.lower()}")
@@ -226,6 +226,7 @@ def collect_links_from_html(page_url: str, html_text: str) -> List[Dict[str, str
 # ... (keep the rest of the file unchanged: crawl_district, crawl_boarddocs, get_minutes_links, load_state, save_state, process_document, write_report_csv, write_scanned_csv, main)
 
 # (Paste the rest from your previous version - I omitted it to save space, but keep crawl_district, crawl_boarddocs, etc. as they are in your last successful version)
+
 
 
 
