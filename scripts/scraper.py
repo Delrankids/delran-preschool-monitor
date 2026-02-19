@@ -91,7 +91,7 @@ def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
                     java_script_enabled=True,
                 )
                 page = context.new_page()
-                stealth_sync(page)
+                stealth(page)  # Correct stealth call
                 page.set_extra_http_headers(HEADERS)
                 if referer:
                     page.set_extra_http_headers({"Referer": referer})
@@ -209,3 +209,4 @@ def collect_links_from_html(page_url: str, html_text: str) -> List[Dict[str, str
 # ... (keep the rest of the file unchanged: crawl_district, crawl_boarddocs, get_minutes_links, load_state, save_state, process_document, write_report_csv, write_scanned_csv, main)
 
 # (Paste the rest from your previous version - I omitted it to save space, but keep crawl_district, crawl_boarddocs, etc. as they are in your last successful version)
+
