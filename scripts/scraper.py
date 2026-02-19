@@ -6,7 +6,6 @@ import json
 import time
 import hashlib
 import logging
-import random
 from typing import List, Dict, Optional, Tuple, Iterable, Set
 from urllib.parse import urljoin, urlparse
 from datetime import datetime
@@ -156,4 +155,26 @@ def domain_of(url: str) -> str:
     try:
         return urlparse(url).netloc.lower()
     except Exception:
+        return ""
+
+def is_allowed_domain(url: str, allowed: Set[str]) -> bool:
+    d = domain_of(url)
+    return any((d == a) or d.endswith("." + a) for a in allowed)
+
+def save_debug_html(name: str, content: bytes) -> None:
+    if not DEBUG_SAVE_HTML:
         return
+    try:
+        ensure_debug_dir()
+        with open(os.path.join(".debug", name), "wb") as f:
+            f.write(content)
+        logging.info("Saved debug HTML -> .debug/%s", name)
+    except Exception as e:
+        logging.warning("Could not write debug HTML %s: %s", name, str(e))
+
+# ---------------------------- Discovery -----------------------------
+
+DOC_EXTS = (".pdf", ".docx", ".doc", ".htm", ".html")
+
+BOARD_DOCS_FILE_RE = re.compile(r"/Board\.nsf/files/([A-Za-z0-9]+)/(?:(?:download)|(?:view))", re.IGNORECASE)
+BOARD_DOCS_JSON_URL
