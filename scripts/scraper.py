@@ -94,9 +94,25 @@ def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
         try:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
-                page = browser.new_page()
-                page.goto(url, timeout=60000)
-                page.wait_for_load_state("networkidle", timeout=30000)
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    viewport={"width": 1280, "height": 800},
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                    bypass_csp=True,
+                    ignore_https_errors=True,
+                )
+                page = context.new_page()
+                page.set_extra_http_headers(HEADERS)
+                if referer:
+                    page.set_extra_http_headers({"Referer": referer})
+                response = page.goto(url, timeout=90000, wait_until="networkidle")
+                if response is None:
+                    logging.warning("No response from goto")
+                else:
+                    logging.info(f"Playwright response status: {response.status}")
+                # Wait extra time for Cloudflare or JS to settle
+                page.wait_for_timeout(5000)  # 5 seconds extra
                 html = page.content()
                 browser.close()
                 logging.info(f"Playwright fetch success: {len(html)} bytes")
@@ -104,12 +120,13 @@ def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
                     def __init__(self, text):
                         self.text = text
                         self.content = text.encode('utf-8')
-                        self.status_code = 200
+                        self.status_code = 200 if len(text) > 1000 else 403
                     def raise_for_status(self):
-                        pass
+                        if self.status_code != 200:
+                            raise requests.exceptions.HTTPError(f"Status {self.status_code}")
                 return FakeResponse(html)
         except Exception as e:
-            logging.error(f"Playwright fetch failed: {e}")
+            logging.error(f"Playwright fetch failed: {str(e)}")
             raise
     else:
         headers = dict(HEADERS)
@@ -415,3 +432,4 @@ def write_report_csv(results: List[Dict]) -> None:
                     "keyword": m["keyword"],
                     "snippet": m["snippet"]
                 })
+
