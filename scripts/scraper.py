@@ -103,7 +103,7 @@ def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
                 else:
                     logging.info(f"Playwright response status: {response.status}")
 
-                # Attempt to close alert pop-up (common selectors)
+                # Attempt to close alert pop-up
                 try:
                     page.wait_for_timeout(5000)
                     page.click('button[aria-label="close"], button.close, [class*="close"], [id*="close"], [title="Close"], .alert-dismissible button', timeout=10000)
@@ -111,7 +111,7 @@ def fetch(url: str, referer: Optional[str] = None) -> requests.Response:
                 except Exception as e:
                     logging.info(f"No pop-up close button found or failed to click: {e}")
 
-                page.wait_for_timeout(8000)  # Extra wait for content after close
+                page.wait_for_timeout(8000)
                 html = page.content()
                 browser.close()
 
@@ -156,141 +156,4 @@ def domain_of(url: str) -> str:
     try:
         return urlparse(url).netloc.lower()
     except Exception:
-        return ""
-
-def is_allowed_domain(url: str, allowed: Set[str]) -> bool:
-    d = domain_of(url)
-    return any((d == a) or d.endswith("." + a) for a in allowed)
-
-def save_debug_html(name: str, content: bytes) -> None:
-    if not DEBUG_SAVE_HTML:
         return
-    try:
-        ensure_debug_dir()
-        with open(os.path.join(".debug", name), "wb") as f:
-            f.write(content)
-        logging.info("Saved debug HTML -> .debug/%s", name)
-    except Exception as e:
-        logging.warning("Could not write debug HTML %s: %s", name, str(e))
-
-# ---------------------------- Discovery -----------------------------
-
-DOC_EXTS = (".pdf", ".docx", ".doc", ".htm", ".html")
-
-BOARD_DOCS_FILE_RE = re.compile(r"/Board\.nsf/files/([A-Za-z0-9]+)/(?:(?:download)|(?:view))", re.IGNORECASE)
-BOARD_DOCS_JSON_URL_RE = re.compile(r'"downloadUrl"\s*:\s*"([^"]+/Board\.nsf/files/[^"]+?)"', re.IGNORECASE)
-BOARD_DOCS_JSON_NAME_RE = re.compile(r'"fileName"\s*:\s*"([^"]+?)"', re.IGNORECASE)
-
-def collect_links_from_html(page_url: str, html_text: str) -> List[Dict[str, str]]:
-    soup = BeautifulSoup(html_text, "lxml")
-    items: List[Dict[str, str]] = []
-    seen: Set[str] = set()
-
-    logging.info(f"Collecting links from {page_url}")
-
-    # Catch BoardDocs patterns
-    for a in soup.find_all("a", href=True):
-        href = a.get("href") or ""
-        full = urljoin(page_url, href)
-        title = a.get_text(strip=True) or full
-
-        if BOARD_DOCS_FILE_RE.search(full):
-            if full not in seen:
-                seen.add(full)
-                items.append({"title": title or "BoardDocs Attachment", "url": full, "source": "boarddocs"})
-                logging.info(f"Found BoardDocs: {full}")
-            continue
-
-        lower_full = full.lower()
-        lower_title = title.lower()
-
-        # Broad match for Delran minutes / file handlers
-        if 'getfile.ashx' in lower_full or 'displayfile.aspx' in lower_full or \
-           any(word in lower_title for word in ['minutes', 'agenda', 'boe', 'board', 'reorganization', 're-organ', 'session', 'meeting', 'work session']):
-            if full not in seen:
-                seen.add(full)
-                items.append({
-                    "title": title or "Delran Meeting Document",
-                    "url": full,
-                    "source": "district"
-                })
-                logging.info(f"FOUND DELRAN DOCUMENT: {full} ({title})")
-
-    # BoardDocs JSON in scripts
-    for script in soup.find_all("script"):
-        s = script.string or script.get_text() or ""
-        if not s:
-            continue
-        for m_url in BOARD_DOCS_JSON_URL_RE.finditer(s):
-            file_url = urljoin(page_url, m_url.group(1))
-            if file_url not in seen:
-                seen.add(file_url)
-                name_match = BOARD_DOCS_JSON_NAME_RE.search(s)
-                fname = name_match.group(1) if name_match else "BoardDocs Attachment"
-                items.append({"title": fname, "url": file_url, "source": "boarddocs"})
-                logging.info(f"Found BoardDocs JSON: {file_url}")
-
-    logging.info(f"Collected {len(items)} links from {page_url}")
-    return items
-
-def crawl_district(start_urls: Iterable[str], allowed_domains: Set[str],
-                   max_pages: int, max_depth: int) -> List[Dict[str, str]]:
-    queue: List[Tuple[str, int]] = [(u, 0) for u in start_urls]
-    visited: Set[str] = set()
-    results: List[Dict[str, str]] = []
-
-    while queue and len(visited) < max_pages:
-        url, depth = queue.pop(0)
-        if url in visited:
-            continue
-        visited.add(url)
-
-        if not is_allowed_domain(url, allowed_domains):
-            continue
-
-        try:
-            resp = fetch(url)
-        except Exception as e:
-            logging.warning("District fetch failed %s: %s", url, e)
-            continue
-
-        save_debug_html(f"district_{len(visited):03d}.html", resp.content)
-
-        results.extend(collect_links_from_html(url, resp.text))
-
-        if depth < max_depth:
-            soup = BeautifulSoup(resp.text, "lxml")
-
-            # Pagination detection
-            pagination_patterns = re.compile(r'(next|>|»|more|\.{3}|page\s*\d+|pg=|p=)', re.IGNORECASE)
-            next_links = (
-                soup.find_all('a', string=pagination_patterns) +
-                soup.find_all('a', href=re.compile(r'(page|pg|p)=', re.IGNORECASE))
-            )
-
-            for a in next_links:
-                h = a.get('href') or ''
-                nxt = urljoin(url, h)
-                if nxt not in visited and is_allowed_domain(nxt, allowed_domains) and nxt != url:
-                    queue.append((nxt, depth + 1))
-                    logging.info(f"Queued pagination link: {nxt}")
-
-            # Follow promising links
-            for a in soup.find_all("a", href=True):
-                h = a.get("href") or ""
-                nxt = urljoin(url, h)
-                if (nxt not in visited and
-                    is_allowed_domain(nxt, allowed_domains) and
-                    any(kw in nxt.lower() for kw in ['minutes', 'boe', 'board', 'meeting', 'agenda', 'getfile', 'displayfile'])):
-                    queue.append((nxt, depth + 1))
-                    logging.info(f"Queued related minutes link: {nxt}")
-
-    out, seen = [], set()
-    for it in results:
-        if it["url"] not in seen:
-            seen.add(it["url"])
-            out.append(it)
-    logging.info("District links discovered: %d (pages crawled=%d)", len(out), len(visited))
-    return out
-
-
