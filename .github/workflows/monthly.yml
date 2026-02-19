@@ -47,6 +47,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -228,4 +229,3 @@ jobs:
             **/.debug/**
           if-no-files-found: ignore
           retention-days: 21
-
