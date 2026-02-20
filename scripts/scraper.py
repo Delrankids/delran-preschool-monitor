@@ -347,13 +347,14 @@ def crawl_boarddocs(root_url: str, max_files: int) -> List[Dict[str, str]]:
     return out
 
 def get_minutes_links() -> List[Dict[str, str]]:
-    start_urls = [BASE_URL, BOE_URL]
-    district_links = crawl_district(start_urls, ALLOWED_DISTRICT_DOMAINS, MAX_DISTRICT_PAGES, MAX_CRAWL_DEPTH)
+    # District crawl is blocked by bot protection - use BoardDocs only
+    # start_urls = [BASE_URL, BOE_URL]
+    # district_links = crawl_district(start_urls, ALLOWED_DISTRICT_DOMAINS, MAX_DISTRICT_PAGES, MAX_CRAWL_DEPTH)
     boarddocs_links = crawl_boarddocs(BOARDDOCS_PUBLIC, MAX_BOARDDOCS_FILES)
-    all_links = district_links + boarddocs_links
+    all_links = boarddocs_links
     if YEAR:
         all_links = [link for link in all_links if str(YEAR) in link["url"] or str(YEAR) in link["title"]]
-    logging.info(f"Total minutes links discovered: {len(all_links)}")
+    logging.info(f"Total minutes links discovered (BoardDocs only): {len(all_links)}")
     return all_links
 
 # ---------------------------- State Management ------------------------------
@@ -505,3 +506,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
